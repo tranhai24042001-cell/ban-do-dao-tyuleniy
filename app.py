@@ -50,16 +50,18 @@ def load_data():
 df_stats = load_data()
 
 with st.sidebar:
-    st.header("ВЫБЕРИТЕ ГОД (CHỌN NĂM)")
+    st.header("BẢN ĐỒ CHÍNH (MAIN MAP)")
     years = []
     if os.path.exists("data"): years = sorted([d for d in os.listdir("data") if os.path.isdir(os.path.join("data", d))])
     
     if not years and df_stats is not None: years = sorted(df_stats.index.tolist())
     if not years: years = [2024]
     
-    sel_year = st.selectbox("Год:", years, index=len(years)-1, key="main_year")
+    # Biến này chỉ dành cho Bản đồ chính
+    sel_year = st.selectbox("Chọn năm hiển thị chính:", years, index=len(years)-1, key="main_year_selector")
     st.markdown("---")
     
+    # Thống kê
     val = 0
     dt = {"Классификация": [], "Площадь (га)": []}
     if df_stats is not None and int(sel_year) in df_stats.index:
@@ -92,7 +94,12 @@ with st.sidebar:
 
 st.title(f"Остров Тюлений - {sel_year}")
 
-# Zoom Button
+# --- SLIDER ĐỘ MỜ (OPACITY CONTROL) ---
+# Giá trị opacity: 1.0 (mặc định - ảnh phân loại hiện rõ) đến 0.0 (mờ hoàn toàn - thấy ảnh vệ tinh)
+opacity_value = st.slider("Độ mờ ảnh phân loại (Opacity)", 0.0, 1.0, 1.0, 0.05)
+st.markdown("---")
+
+# Zoom Button (Code này ổn định)
 zoom_svg = """<svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="#444" stroke-width="2" fill="white" fill-opacity="0.8"/><line x1="12" y1="2" x2="12" y2="22" stroke="#444" stroke-width="2"/><line x1="2" y1="12" x2="22" y2="12" stroke="#444" stroke-width="2"/><circle cx="12" cy="12" r="2" fill="#444"/></svg>"""
 class ZoomButton(MacroElement):
     _template = Template("""
@@ -119,7 +126,6 @@ def process_img(s, c):
             dst_crs, dst_tr, w, h = ref.crs, ref.transform, ref.width, ref.height
             kw = ref.meta.copy()
         with rasterio.open(s) as src:
-            # --- FIX QUAN TRỌNG: Dùng dtypes[0] ---
             dt = src.dtypes[0] if isinstance(src.dtypes, (list, tuple)) else src.dtypes
             kw.update({'crs': dst_crs, 'transform': dst_tr, 'width': w, 'height': h, 'count': src.count, 'dtype': dt, 'driver': 'GTiff'})
             with rasterio.open(o, 'w', **kw) as dst:
@@ -128,22 +134,22 @@ def process_img(s, c):
         return o
     except: return s
 
-# --- 7. BẢN ĐỒ CHÍNH (ĐÃ SỬA: DÙNG LAYER CONTROL THAY CHO SPLIT MAP) ---
-def render_main_map(year):
+# --- 7. BẢN ĐỒ CHÍNH (DÙNG OPACITY THAY CHO SPLIT MAP) ---
+def render_main_map(year, opacity):
     original_sat_path = f"data/{year}/satellite.tif"
     class_path = f"data/{year}/landcover.tif"
-    sat_path = process_matched_image(original_sat_path, class_path) if os.path.exists(original_sat_path) and os.path.exists(class_path) else original_sat_path
+    sat_path = process_img(original_sat_path, class_path) if os.path.exists(original_sat_path) and os.path.exists(class_path) else original_sat_path
 
     m = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, fullscreen_control=True, scale_control=True, tiles=None)
     m.add_tile_layer(url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", name="Google Satellite", attribution="Google", overlay=True, shown=False)
     m.add_tile_layer(url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", name="OpenStreetMap", attribution="OpenStreetMap", overlay=True, shown=False)
 
     if os.path.exists(sat_path) and os.path.exists(class_path):
-        # Ảnh 1: Ảnh vệ tinh (Tắt hiện thị ban đầu)
-        m.add_raster(sat_path, layer_name=f"Спутник ({year})", shown=False)
-        # Ảnh 2: Phân loại (Hiện thị mặc định)
-        m.add_raster(class_path, layer_name=f"Классификация ({year})", shown=True)
-        # Thêm Layer Control để bật/tắt 2 lớp ảnh (ổn định hơn Split Map)
+        # Lớp DƯỚI (Ảnh Vệ tinh) - Luôn hiển thị (shown=True)
+        m.add_raster(sat_path, layer_name=f"1. Ảnh Vệ tinh ({year})", shown=True)
+        # Lớp TRÊN (Ảnh Phân loại) - Opacity = giá trị từ thanh trượt
+        m.add_raster(class_path, layer_name=f"2. Ảnh Phân loại ({year})", shown=True, opacity=opacity)
+        
         m.add_layer_control() 
     else:
         st.warning(f"Chưa tìm thấy ảnh năm {year}")
@@ -155,11 +161,11 @@ def render_main_map(year):
     m.add_html(legend, position='bottomright')
     return m
 
-m_main = render_main_map(selected_year_main)
+m_main = render_main_map(sel_year, opacity_value)
 m_main.to_streamlit(height=500)
 
 # ====================================================================
-# --- 8. PHẦN SO SÁNH (ĐÃ SỬA: DÙNG LAYER CONTROL) ---
+# --- 8. PHẦN SO SÁNH (DÙNG ADD_RASTER ỔN ĐỊNH) ---
 # ====================================================================
 st.markdown("---")
 st.subheader("🔍 Сравнение изображений (So sánh độc lập)")
@@ -168,19 +174,17 @@ col_comp1, col_comp2 = st.columns(2)
 
 def render_sub_map_independent(key_suffix):
     c_y, c_t = st.columns([1, 1])
-    with c_y: y = st.selectbox("Год:", available_years, key=f"year_{key_suffix}")
-    with c_t: t = st.selectbox("Тип:", ["Спутник", "Классификация"], key=f"type_{key_suffix}")
+    with c_y: y = st.selectbox("Год:", available_years, key=f"y_{key_suffix}")
+    with c_t: t = st.selectbox("Тип:", ["Спутник", "Классификация"], key=f"t_{key_suffix}")
     p = f"data/{y}/satellite.tif" if "Спутник" in t else f"data/{y}/landcover.tif"
     
     ms = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, scale_control=True, tiles="OpenStreetMap")
     
     if os.path.exists(p):
         try:
-            # FIX: Dùng add_raster an toàn
             ms.add_raster(p, layer_name="Image", zoom_to_layer=False)
             ms.add_layer_control()
         except Exception:
-            # Thông báo lỗi chung thay vì lỗi localtileserver
             st.error("Lỗi hiển thị ảnh: Vui lòng kiểm tra lại cấu hình thư viện.")
     
     ms.to_streamlit(height=400)
@@ -196,4 +200,4 @@ with col_comp2:
 # --- 9. THÔNG TIN ĐẢO ---
 st.markdown("---")
 st.subheader("ℹ️ Обзор острова Тюлений")
-st.markdown("""<div class="info-card"><h3>Остров Тюлений</h3><p>Остров Тюлений — песчаный остров в северо-западной части Каспийского моря.</p><h4>1. 📍 География</h4><ul><li><b>Расположение:</b> 47 km от Дагестана.</li><li><b>Размеры:</b> Длина 8-10 km.</li></ul><h4>2. 🏜️ Климат</h4><ul><li>Полупустынный, засушливый.</li></ul><h4>3. 🌿 Экосистема</h4><ul><li>Важное лежбище каспийского тюленя и место гнездования птиц.</li></ul></div>""", unsafe_allow_html=True)
+st.markdown("""<div class="info-card"><h3>Остров Тюлений</h3><p>Остров Тюлений — песчаный остров в северо-западной части Каспийского моря.</p><h4>1. 📍 География</h4><ul><li><b>Расположение:</b> 47 km от Дагестана.</li><li><b>Размеры:</b> Длина 8-10 km.</li></ul><h4>2. 🏜️ Климат</h4><ul><li>Полупустынный, засушливый.</li></ul><h4>3. 🌿 Экосистема</h4><ul><li>Важное лежбище каспийского тюленя và nơi гнеzdowania ptic (nơi chim làm tổ).</li></ul></div>""", unsafe_allow_html=True)
