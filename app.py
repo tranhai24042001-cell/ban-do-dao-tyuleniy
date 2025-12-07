@@ -3,15 +3,10 @@ import leafmap.foliumap as leafmap
 import os
 import pandas as pd
 import altair as alt
-
-# --- THƯ VIỆN XỬ LÝ ẢNH ---
 import rasterio
 from rasterio.warp import reproject, Resampling
-
-# --- IMPORT MODULE BẮT BUỘC ---
 from folium import MacroElement
 from branca.element import Template
-# ------------------------------
 
 st.set_page_config(layout="wide", page_title="WebGIS Monitoring - Остров Тюлений")
 
@@ -53,6 +48,8 @@ with st.sidebar:
     st.header("ВЫБЕРИТЕ ГОД (CHỌN NĂM)")
     years = []
     if os.path.exists("data"): years = sorted([d for d in os.listdir("data") if os.path.isdir(os.path.join("data", d))])
+    
+    # Fallback
     if not years and df_stats is not None: years = sorted(df_stats.index.tolist())
     if not years: years = [2024]
     
@@ -109,7 +106,7 @@ class ZoomButton(MacroElement):
         {% endmacro %}
     """)
 
-# Process Image
+# Process Image Fix
 def process_img(s, c):
     o = s.replace(".tif", "_matched.tif")
     if os.path.exists(o): return o
@@ -118,7 +115,7 @@ def process_img(s, c):
             dst_crs, dst_tr, w, h = ref.crs, ref.transform, ref.width, ref.height
             kw = ref.meta.copy()
         with rasterio.open(s) as src:
-            # FIX LỖI DTYPE TẠI ĐÂY
+            # --- FIX QUAN TRỌNG: Dùng dtypes[0] ---
             dt = src.dtypes[0] if isinstance(src.dtypes, (list, tuple)) else src.dtypes
             kw.update({'crs': dst_crs, 'transform': dst_tr, 'width': w, 'height': h, 'count': src.count, 'dtype': dt, 'driver': 'GTiff'})
             with rasterio.open(o, 'w', **kw) as dst:
@@ -132,7 +129,7 @@ def render_map(y):
     c = f"data/{y}/landcover.tif"
     s_final = process_img(s, c) if os.path.exists(s) and os.path.exists(c) else s
     
-    m = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, scale_control=True)
+    m = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, fullscreen_control=True, scale_control=True)
     m.add_tile_layer(url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", name="Google Satellite", attribution="Google", overlay=True, shown=False)
     
     if os.path.exists(s_final) and os.path.exists(c):
@@ -142,6 +139,7 @@ def render_map(y):
         
     m.add_child(ZoomButton())
     
+    # Legend Fix Font
     legend = """<div style="position: fixed; bottom: 30px; right: 10px; width: 170px; background-color: white; border: 2px solid #333; z-index:9999; font-size:14px; padding: 10px; opacity: 0.95; font-family: Arial, sans-serif;"><b style="color:black; display:block; margin-bottom:5px; border-bottom:1px solid #ccc; padding-bottom:3px;">&#1050;&#1083;&#1072;&#1089;&#1089;&#1080;&#1092;&#1080;&#1082;&#1072;&#1094;&#1080;&#1103;</b><div style="margin-bottom:4px;"><span style="background:blue; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1042;&#1086;&#1076;&#1072;</span></div><div style="margin-bottom:4px;"><span style="background:#D2691E; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1055;&#1086;&#1095;&#1074;&#1072;</span></div><div style="margin-bottom:4px;"><span style="background:#00CED1; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1042;&#1086;&#1076;&#1085;&#1086;-&#1073;&#1086;&#1083;&#1086;&#1090;.</span></div><div style="margin-bottom:4px;"><span style="background:green; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1056;&#1072;&#1089;&#1090;&#1077;&#1085;&#1080;&#1103;</span></div><div style="margin-top:6px; padding-top:4px; border-top:1px dashed #ccc;"><span style="border: 2px solid red; background:transparent; width:18px; height:12px; display:inline-block; margin-right:8px;"></span><span>&#1043;&#1088;&#1072;&#1085;&#1080;&#1094;&#1072;</span></div></div>"""
     m.add_html(legend, position='bottomright')
     return m
@@ -161,7 +159,7 @@ def sub_map(k):
     ms = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, scale_control=True)
     if os.path.exists(p):
         try: ms.add_raster(p, layer_name="Img", zoom_to_layer=False)
-        except: st.error("Lỗi thư viện ảnh (xarray)")
+        except: st.error("Lỗi: Cần localtileserver")
     ms.to_streamlit(height=400)
 
 with c1: st.markdown('<div class="comp-header">Cửa sổ 1</div>', unsafe_allow_html=True); sub_map("L")
