@@ -8,5 +8,4 @@ folium
 branca
 xarray
 rioxarray
-localtileserver
 psutil
