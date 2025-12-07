@@ -3,109 +3,184 @@ import leafmap.foliumap as leafmap
 import os
 import pandas as pd
 import altair as alt
+import numpy as np
 
 # --- THƯ VIỆN XỬ LÝ ẢNH ---
 import rasterio
 from rasterio.warp import reproject, Resampling
 
 # --- IMPORT MODULE BẮT BUỘC ---
-from folium import MacroElement
-from branca.element import Template
+from folium import MacroElement, Map
+from branca.element import Template, Element
+
 # ------------------------------
 
+# --- 1. CẤU HÌNH TRANG ---
 st.set_page_config(layout="wide", page_title="WebGIS Monitoring - Остров Тюлений")
 
-# Tọa độ trung tâm
+# Tọa độ trung tâm đảo Tyuleniy
 TARGET_CENTER = [44.475, 47.513]
 TARGET_ZOOM = 13
 
-# CSS
+# --- CSS TÙY CHỈNH ---
 st.markdown("""
     <style>
         .block-container {padding-top: 1rem;}
         h1 {text-align: center; color: #2c3e50;}
-        .stat-box { background-color: #f8f9fa; padding: 15px; border-radius: 5px; border: 1px solid #dee2e6; margin-bottom: 10px; }
-        .info-card { background-color: #ffffff; padding: 20px; border-radius: 10px; border: 1px solid #ddd; margin-top: 20px; font-family: 'Arial', sans-serif; color: #333; line-height: 1.6; }
+        
+        /* Обеспечение квадратной формы основной карты */
+        .stCustomMap > iframe {
+            aspect-ratio: 1 / 1; 
+            height: auto !important; 
+            min-height: 500px;
+        }
+        
+        /* Xóa CSS cho Opacity Control không sử dụng */
+        
+        .stat-box {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            border: 1px solid #dee2e6;
+            margin-bottom: 10px;
+        }
+        .info-card {
+            background-color: #ffffff;
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid #ddd;
+            margin-top: 20px;
+            font-family: 'Arial', sans-serif;
+            color: #333;
+            line-height: 1.6;
+        }
         .info-card h3 { color: #2c3e50; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
         .info-card h4 { color: #007bff; margin-top: 15px; margin-bottom: 5px; font-weight: bold; }
         .info-card ul { margin-left: 20px; margin-bottom: 10px; }
         .info-card li { margin-bottom: 5px; }
+        
         .comp-header { font-weight: bold; text-align: center; color: #555; margin-bottom: 5px;}
     </style>
 """, unsafe_allow_html=True)
 
+# --- 2. HÀM ĐỌC DỮ LIỆU ---
 @st.cache_data
 def load_data():
     try:
         df = pd.read_excel("so_lieu_thong_ke.xlsx", engine='openpyxl')
-        cols = ['Длина', 'Вода', 'Почва', 'Водно-полотные', 'Растения']
-        for c in cols:
-            if c in df.columns: df[c] = df[c].astype(str).str.replace(',', '.').apply(pd.to_numeric, errors='coerce')
+        cols_to_fix = ['Длина', 'Вода', 'Почва', 'Водно-полотные', 'Растения']
+        for col in cols_to_fix:
+            if col in df.columns:
+                df[col] = df[col].astype(str).str.replace(',', '.').apply(pd.to_numeric, errors='coerce')
         if 'Год' in df.columns:
             df['Year_Str'] = df['Год'].astype(str)
             df = df.set_index("Год")
         return df
-    except: return None
+    except Exception:
+        return None
 
 df_stats = load_data()
 
+# --- 3. MENU BÊN TRÁI (CHỈ ĐIỀU KHIỂN BẢN ĐỒ CHÍNH) ---
 with st.sidebar:
-    st.header("BẢN ĐỒ CHÍNH (MAIN MAP)")
-    years = []
-    if os.path.exists("data"): years = sorted([d for d in os.listdir("data") if os.path.isdir(os.path.join("data", d))])
+    st.header("Основная карта")
     
-    if not years and df_stats is not None: years = sorted(df_stats.index.tolist())
-    if not years: years = [2024]
+    available_years = []
+    if os.path.exists("data"):
+        available_years = sorted([d for d in os.listdir("data") if os.path.isdir(os.path.join("data", d))])
+    if not available_years and df_stats is not None:
+        available_years = sorted(df_stats.index.tolist())
+    if not available_years: available_years = [2024]
     
-    sel_year = st.selectbox("Год:", years, index=len(years)-1, key="main_year")
+    selected_year_main = st.selectbox("Год:", available_years, index=len(available_years)-1, key="main_year_selector")
+    
     st.markdown("---")
     
-    val = 0
-    dt = {"Классификация": [], "Площадь (га)": []}
-    if df_stats is not None and int(sel_year) in df_stats.index:
-        r = df_stats.loc[int(sel_year)]
-        val = r.get('Длина', 0)
-        dt = {
+    # Số liệu thống kê (Theo năm chính)
+    coastline_val = 0
+    data_table = {"Классификация": [], "Площадь (га)": []}
+    if df_stats is not None and int(selected_year_main) in df_stats.index:
+        row = df_stats.loc[int(selected_year_main)]
+        coastline_val = row.get('Длина', 0)
+        data_table = {
             "Классификация": ["Вода", "Почва", "Водно-болотные", "Растения"],
-            "Площадь (га)": [f"{r.get('Вода', 0):,.2f}", f"{r.get('Почва', 0):,.2f}", f"{r.get('Водно-полотные', 0):,.2f}", f"{r.get('Растения', 0):,.2f}"]
+            "Площадь (га)": [
+                f"{row.get('Вода', 0):,.2f}", f"{row.get('Почва', 0):,.2f}",
+                f"{row.get('Водно-полотные', 0):,.2f}", f"{row.get('Растения', 0):,.2f}"
+            ]
         }
-    
-    st.subheader("Статистика")
-    st.markdown(f"<div class='stat-box'><b>📏 Длина береговой линии:</b><br><span style='font-size: 24px; color: blue; font-weight: bold;'>{val:,.2f} km</span></div>", unsafe_allow_html=True)
+
+    st.subheader("Статистика (Thống kê)")
+    st.markdown(f"""
+    <div class="stat-box">
+        <b>📏 Длина береговой линии:</b><br>
+        <span style="font-size: 24px; color: blue; font-weight: bold;">{coastline_val:,.2f} km</span>
+    </div>
+    """, unsafe_allow_html=True)
     st.markdown("<b>🌳 Детализация площади:</b>", unsafe_allow_html=True)
-    st.dataframe(dt, hide_index=True)
-    
+    st.dataframe(data_table, hide_index=True)
+
+    # Biểu đồ
     st.markdown("---")
     st.subheader("📊 Динамика изменений")
+    def make_bar_chart(data, y_col, color_hex, title, y_label):
+        bars = alt.Chart(data).mark_bar(color=color_hex).encode(
+            x=alt.X('Year_Str', title=None, axis=alt.Axis(labels=False)),
+            y=alt.Y(y_col, title=None),
+            tooltip=['Year_Str', alt.Tooltip(y_col, title=y_label, format=",.2f")]
+        )
+        text = bars.mark_text(align='center', baseline='bottom', dy=-5, color='black', fontSize=10).encode(text=alt.Text(y_col, format=",.0f"))
+        return (bars + text).properties(title=title, height=150)
+
     if df_stats is not None:
-        cd = df_stats.reset_index()
-        def chart(d, y, c, t):
-            b = alt.Chart(d).mark_bar(color=c).encode(x=alt.X('Year_Str', axis=alt.Axis(labels=False), title=None), y=alt.Y(y, title=None), tooltip=['Year_Str', y])
-            return (b + b.mark_text(align='center', dy=-5, color='black').encode(text=alt.Text(y, format=",.0f"))).properties(title=t, height=150)
-        
-        c1, c2 = st.sidebar.columns(2)
-        with c1: st.altair_chart(chart(cd, 'Длина', '#0000FF', 'Длина (km)'), use_container_width=True)
-        with c2: st.altair_chart(chart(cd, 'Почва', '#D2691E', 'Почва (ha)'), use_container_width=True)
-        c3, c4 = st.sidebar.columns(2)
-        with c3: st.altair_chart(chart(cd, 'Водно-полотные', '#00CED1', 'Водно-болотные'), use_container_width=True)
-        with c4: st.altair_chart(chart(cd, 'Растения', '#228B22', 'Растения (ha)'), use_container_width=True)
+        chart_data = df_stats.reset_index()
+        col1, col2 = st.sidebar.columns(2)
+        with col1: st.altair_chart(make_bar_chart(chart_data, 'Длина', '#0000FF', 'Длина (km)', 'км'), use_container_width=True)
+        with col2: st.altair_chart(make_bar_chart(chart_data, 'Почва', '#D2691E', 'Почва (ha)', 'га'), use_container_width=True)
+        col3, col4 = st.sidebar.columns(2)
+        with col3: st.altair_chart(make_bar_chart(chart_data, 'Водно-полотные', '#00CED1', 'Водно-болотные (ha)', 'га'), use_container_width=True)
+        with col4: st.altair_chart(make_bar_chart(chart_data, 'Растения', '#228B22', 'Растения (ha)', 'га'), use_container_width=True)
 
-st.title(f"Остров Тюлений - {sel_year}")
+# --- 4. TIÊU ĐỀ ---
+st.title(f"Остров Тюлений - {selected_year_main}")
 
-# --- OPACITY SLIDER (Thay thế Split Map) ---
-opacity_value = st.slider("Độ mờ ảnh phân loại (Opacity)", 0.0, 1.0, 1.0, 0.05)
+# 🔥 THÊM: Thanh trượt Opacity Streamlit ngay dưới tiêu đề
+opacity_value = st.slider(
+    "Прозрачность слоя Классификации", 
+    min_value=0.0, 
+    max_value=1.0, 
+    value=0.8, 
+    step=0.05,
+    key="global_opacity_slider"
+)
 st.markdown("---")
 
-# Zoom Button
-zoom_svg = """<svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="#444" stroke-width="2" fill="white" fill-opacity="0.8"/><line x1="12" y1="2" x2="12" y2="22" stroke="#444" stroke-width="2"/><line x1="2" y1="12" x2="22" y2="12" stroke="#444" stroke-width="2"/><circle cx="12" cy="12" r="2" fill="#444"/></svg>"""
+# --- 5. TẠO NÚT ZOOM (SVG) ---
+zoom_icon_svg = """
+<svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+<circle cx="12" cy="12" r="10" stroke="#444" stroke-width="2" fill="white" fill-opacity="0.8"/>
+<line x1="12" y1="2" x2="12" y2="22" stroke="#444" stroke-width="2"/>
+<line x1="2" y1="12" x2="22" y2="12" stroke="#444" stroke-width="2"/>
+<circle cx="12" cy="12" r="2" fill="#444"/>
+</svg>
+"""
+
 class ZoomButton(MacroElement):
     _template = Template("""
         {% macro script(this, kwargs) %}
             L.Control.ZoomButton = L.Control.extend({
                 onAdd: function(map) {
                     var btn = L.DomUtil.create('button', 'leaflet-bar leaflet-control');
-                    btn.innerHTML = `""" + zoom_svg + """`;
-                    btn.style.width = '34px'; btn.style.height = '34px'; btn.style.backgroundColor = 'white'; btn.style.cursor = 'pointer'; btn.style.border = '2px solid rgba(0,0,0,0.2)'; btn.style.display = 'flex'; btn.style.alignItems = 'center'; btn.style.justifyContent = 'center'; btn.title = 'Zoom to Island';
+                    btn.innerHTML = `""" + zoom_icon_svg + """`;
+                    btn.style.width = '34px';
+                    btn.style.height = '34px';
+                    btn.style.backgroundColor = 'white';
+                    btn.style.cursor = 'pointer';
+                    btn.style.border = '2px solid rgba(0,0,0,0.2)';
+                    btn.style.display = 'flex';
+                    btn.style.alignItems = 'center';
+                    btn.style.justifyContent = 'center';
+                    btn.title = 'Zoom to Island';
                     btn.onclick = function() { map.setView([44.475, 47.513], 13); };
                     return btn;
                 }
@@ -114,88 +189,133 @@ class ZoomButton(MacroElement):
         {% endmacro %}
     """)
 
-# Process Image Fix
-def process_img(s, c):
-    o = s.replace(".tif", "_matched.tif")
-    if os.path.exists(o): return o
-    try:
-        with rasterio.open(c) as ref:
-            dst_crs, dst_tr, w, h = ref.crs, ref.transform, ref.width, ref.height
-            kw = ref.meta.copy()
-        with rasterio.open(s) as src:
-            dt = src.dtypes[0] if isinstance(src.dtypes, (list, tuple)) else src.dtypes
-            kw.update({'crs': dst_crs, 'transform': dst_tr, 'width': w, 'height': h, 'count': src.count, 'dtype': dt, 'driver': 'GTiff'})
-            with rasterio.open(o, 'w', **kw) as dst:
-                for i in range(1, src.count+1):
-                    reproject(source=rasterio.band(src, i), destination=rasterio.band(dst, i), src_transform=src.transform, src_crs=src.crs, dst_transform=dst_tr, dst_crs=dst_crs, resampling=Resampling.nearest)
-        return o
-    except: return s
+# 🔥 XÓA/LOẠI BỎ class OpacityControl không cần thiết
 
-# --- 7. BẢN ĐỒ CHÍNH (DÙNG OPACITY) ---
-def render_main_map(year, opacity):
+# --- 6. HÀM XỬ LÝ ẢNH ---
+def process_matched_image(sat_path, class_path):
+    output_path = sat_path.replace(".tif", "_matched.tif")
+    if os.path.exists(output_path): return output_path
+    try:
+        with rasterio.open(class_path) as ref:
+            dst_crs, dst_transform = ref.crs, ref.transform
+            dst_width, dst_height = ref.width, ref.height
+            kwargs = ref.meta.copy()
+        with rasterio.open(sat_path) as src:
+            dtype_val = src.dtypes[0] if isinstance(src.dtypes, (list, tuple)) else src.dtypes
+            kwargs.update({'crs': dst_crs, 'transform': dst_transform, 'width': dst_width, 'height': dst_height, 'count': src.count, 'dtype': dtype_val, 'driver': 'GTiff'})
+            with rasterio.open(output_path, 'w', **kwargs) as dst:
+                for i in range(1, src.count + 1):
+                    reproject(source=rasterio.band(src, i), destination=rasterio.band(dst, i), src_transform=src.transform, src_crs=src.crs, dst_transform=dst_transform, dst_crs=dst_crs, resampling=Resampling.nearest)
+        return output_path
+    except Exception: return sat_path 
+
+# --- 7. BẢN ĐỒ CHÍNH (ĐỘC LẬP) ---
+def render_main_map(year, opacity): # 🔥 Thêm tham số opacity
     original_sat_path = f"data/{year}/satellite.tif"
     class_path = f"data/{year}/landcover.tif"
-    sat_path = process_img(original_sat_path, class_path) if os.path.exists(original_sat_path) and os.path.exists(class_path) else original_sat_path
+    sat_path = process_matched_image(original_sat_path, class_path) if os.path.exists(original_sat_path) and os.path.exists(class_path) else original_sat_path
 
     m = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, fullscreen_control=True, scale_control=True, tiles=None)
-    m.add_tile_layer(url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", name="Google Satellite", attribution="Google", overlay=True, shown=False)
+    
+    # 1. Thêm lớp nền vệ tinh (PHẢI BẬT VÀ NẰM DƯỚI CÙNG)
+    m.add_tile_layer(url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", name="Google Satellite", attribution="Google", overlay=True, shown=True)
     m.add_tile_layer(url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", name="OpenStreetMap", attribution="OpenStreetMap", overlay=True, shown=False)
+    
+    CLASSIFICATION_LAYER_NAME = f"Классификация {year}"
 
     if os.path.exists(sat_path) and os.path.exists(class_path):
-        # Lớp DƯỚI (Ảnh Vệ tinh) - Luôn hiển thị
-        m.add_raster(sat_path, layer_name=f"1. Ảnh Vệ tinh ({year})", shown=True)
-        # Lớp TRÊN (Ảnh Phân loại) - Opacity = giá trị từ thanh trượt
-        m.add_raster(class_path, layer_name=f"2. Классификация ({year})", shown=True, opacity=opacity)
         
-        m.add_layer_control() 
+        # 2. Thêm lớp ảnh vệ tinh raster đã xử lý (nằm trên lớp nền Google)
+        try:
+             # Đảm bảo lớp này có mặt
+             m.add_raster(sat_path, layer_name=f"Спутник {year} (Raster)", opacity=1.0, shown=False) 
+        except Exception:
+             st.warning(f"Не удалось загрузить растровое спутниковое изображение за {year} год")
+        
+        # 3. Thêm lớp phân loại (Luôn nằm trên cùng, áp dụng Opacity từ thanh trượt)
+        try:
+            m.add_raster(class_path, layer_name=CLASSIFICATION_LAYER_NAME, opacity=opacity, shown=True) # 🔥 Áp dụng opacity_value
+        except Exception:
+             st.warning(f"Не удалось загрузить слой классификации за {year} год")
+
     else:
-        st.warning(f"Chưa tìm thấy ảnh năm {year}")
+        st.warning(f"Не найдено изображение за {year} год")
 
     m.add_child(ZoomButton())
+    
+    # 🔥 XÓA: Loại bỏ m.add_child(OpacityControl(...))
 
-    # Legend Fix Font
-    legend = """<div style="position: fixed; bottom: 30px; right: 10px; width: 170px; background-color: white; border: 2px solid #333; z-index:9999; font-size:14px; padding: 10px; opacity: 0.95; font-family: Arial, sans-serif;"><b style="color:black; display:block; margin-bottom:5px; border-bottom:1px solid #ccc; padding-bottom:3px;">&#1050;&#1083;&#1072;&#1089;&#1089;&#1080;&#1092;&#1080;&#1082;&#1072;&#1094;&#1080;&#1103;</b><div style="margin-bottom:4px;"><span style="background:blue; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1042;&#1086;&#1076;&#1072;</span></div><div style="margin-bottom:4px;"><span style="background:#D2691E; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1055;&#1086;&#1095;&#1074;&#1072;</span></div><div style="margin-bottom:4px;"><span style="background:#00CED1; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1042;&#1086;&#1076;&#1085;&#1086;-&#1073;&#1086;&#1083;&#1086;&#1090;.</span></div><div style="margin-bottom:4px;"><span style="background:green; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1056;&#1072;&#1089;&#1090;&#1077;&#1085;&#1080;&#1103;</span></div><div style="margin-top:6px; padding-top:4px; border-top:1px dashed #ccc;"><span style="border: 2px solid red; background:transparent; width:18px; height:12px; display:inline-block; margin-right:8px;"></span><span>&#1043;&#1088;&#1072;&#1085;&#1080;&#1094;&#1072;</span></div></div>"""
-    m.add_html(legend, position='bottomright')
+    legend_html = """
+    <div style="position: fixed; bottom: 30px; right: 10px; width: 170px; background-color: white; border: 2px solid #333; z-index:9999; font-size:14px; padding: 10px; opacity: 0.95; font-family: Arial, sans-serif;">
+        <b style="color:black; display:block; margin-bottom:5px; border-bottom:1px solid #ccc; padding-bottom:3px;">&#1050;&#1083;&#1072;&#1089;&#1089;&#1080;&#1092;&#1080;&#1082;&#1072;&#1094;&#1080;&#1103;</b>
+        <div style="margin-bottom:4px;"><span style="background:blue; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1042;&#1086;&#1076;&#1072;</span></div>
+        <div style="margin-bottom:4px;"><span style="background:#D2691E; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1055;&#1086;&#1095;&#1074;&#1072;</span></div>
+        <div style="margin-bottom:4px;"><span style="background:#00CED1; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1042;&#1086;&#1076;&#1085;&#1086;-&#1073;&#1086;&#1083;&#1086;&#1090;.</span></div>
+        <div style="margin-bottom:4px;"><span style="background:green; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1056;&#1072;&#1089;&#1090;&#1077;&#1085;&#1080;&#1103;</span></div>
+        <div style="margin-top:6px; padding-top:4px; border-top:1px dashed #ccc;"><span style="border: 2px solid red; background:transparent; width:18px; height:12px; display:inline-block; margin-right:8px;"></span><span>&#1043;&#1088;&#1072;&#1085;&#1080;&#1094;&#1072;</span></div>
+    </div>
+    """
+    m.add_html(legend_html, position='bottomright')
     return m
 
-m_main = render_main_map(sel_year, opacity_value)
-m_main.to_streamlit(height=500)
+# Hiển thị bản đồ chính
+m_main = render_main_map(selected_year_main, opacity_value) # 🔥 Truyền giá trị opacity
+
+# Bọc bản đồ chính trong div để áp dụng CSS hình vuông
+st.markdown('<div class="stCustomMap">', unsafe_allow_html=True)
+m_main.to_streamlit(height=650) 
+st.markdown('</div>', unsafe_allow_html=True)
 
 # ====================================================================
-# --- 8. PHẦN SO SÁNH (DÙNG ADD_RASTER) ---
+# --- 8. PHẦN SO SÁNH (ĐỘC LẬP HOÀN TOÀN) ---
 # ====================================================================
-st.markdown("---")
-st.subheader("🔍 Сравнение изображений (So sánh độc lập)")
-
 col_comp1, col_comp2 = st.columns(2)
 
 def render_sub_map_independent(key_suffix):
+    # Mỗi ô có menu riêng, dùng KEY riêng (key_suffix) để không bị trùng
     c_y, c_t = st.columns([1, 1])
-    with c_y: y = st.selectbox("Год:", available_years, key=f"y_{key_suffix}")
-    with c_t: t = st.selectbox("Тип:", ["Спутник", "Классификация"], key=f"t_{key_suffix}")
-    p = f"data/{y}/satellite.tif" if "Спутник" in t else f"data/{y}/landcover.tif"
+    with c_y:
+        y_sel = st.selectbox("Год:", available_years, key=f"year_{key_suffix}")
+    with c_t:
+        t_sel = st.selectbox("Тип:", ["Спутник", "Классификация"], key=f"type_{key_suffix}")
     
-    ms = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, scale_control=True, tiles="OpenStreetMap")
-    
-    if os.path.exists(p):
-        try:
-            ms.add_raster(p, layer_name="Image", zoom_to_layer=False)
-            ms.add_layer_control()
-        except Exception:
-            # Thông báo lỗi chung, nhưng lỗi này không nên xảy ra sau khi fix
-            st.error("Lỗi hiển thị ảnh: Vui lòng kiểm tra lại cấu hình thư viện.")
-    
-    ms.to_streamlit(height=400)
+    final_path = None
+    layer_name = None
+    if "Спутник" in t_sel: 
+        final_path = f"data/{y_sel}/satellite.tif"
+        layer_name = "Спутник" 
+    else: 
+        final_path = f"data/{y_sel}/landcover.tif"
+        layer_name = "Классификация"
 
+    m_sub = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, scale_control=True, tiles="OpenStreetMap")
+    
+    if final_path and os.path.exists(final_path):
+        try:
+            m_sub.add_raster(final_path, layer_name=layer_name, zoom_to_layer=False)
+        except Exception as e:
+            st.error("Требуется установка библиотек: pip install xarray rioxarray") 
+    else:
+        st.warning(f"Нет изображения за {y_sel} год") 
+    
+    m_sub.to_streamlit(height=400)
+
+# Gọi hàm render cho 2 cột với key khác nhau ("left" và "right")
 with col_comp1:
-    st.markdown('<div class="comp-header">Cửa sổ 1</div>', unsafe_allow_html=True)
+    st.markdown('<div class="comp-header"></div>', unsafe_allow_html=True)
     render_sub_map_independent("left")
 
 with col_comp2:
-    st.markdown('<div class="comp-header">Cửa sổ 2</div>', unsafe_allow_html=True)
+    st.markdown('<div class="comp-header"></div>', unsafe_allow_html=True)
     render_sub_map_independent("right")
+# ====================================================================
 
 # --- 9. THÔNG TIN ĐẢO ---
 st.markdown("---")
 st.subheader("ℹ️ Обзор острова Тюлений")
-st.markdown("""<div class="info-card"><h3>Остров Тюлений</h3><p>Остров Тюлений — песчаный остров в северо-западной части Каспийского моря.</p><h4>1. 📍 География</h4><ul><li><b>Расположение:</b> 47 km от Дагестана.</li><li><b>Размеры:</b> Длина 8-10 km.</li></ul><h4>2. 🏜️ Климат</h4><ul><li>Полупустынный, засушливый.</li></ul><h4>3. 🌿 Экосистема</h4><ul><li>Важное лежбище каспийского тюленя и место гнездования птиц.</li></ul></div>""", unsafe_allow_html=True)
+st.markdown("""
+<div class="info-card">
+    <h3>Остров Тюлений (Tyuleniy Island)</h3>
+    <p>Остров Тюлений — это песчаный остров, расположенный в северо-западной части Каспийского моря в 47 км от побережья Дагестана (Россия), который, несмотря на отсутствие постоянного населения, имеет исключительное экологическое значение как ключевое место обитания краснокнижных каспийских тюленей и гнездования редких видов птиц. Остров характеризуется низменным рельефом с неустойчивой формой, постоянно меняющейся под воздействием колебаний уровня моря и ветров, а также суровым полупустынным климатом; ранее здесь существовал рыбацкий поселок, но в настоящее время территория используется исключительно для работы гидрометеорологической станции и пограничных постов с целью мониторинга уникальной экосистемы..</p>
+</div>
+""", unsafe_allow_html=True)
