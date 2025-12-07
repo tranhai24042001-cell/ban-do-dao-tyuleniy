@@ -129,7 +129,7 @@ def render_map(y):
     c = f"data/{y}/landcover.tif"
     s_final = process_img(s, c) if os.path.exists(s) and os.path.exists(c) else s
     
-    m = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, fullscreen_control=True, scale_control=True)
+    m = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, scale_control=True)
     m.add_tile_layer(url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", name="Google Satellite", attribution="Google", overlay=True, shown=False)
     
     if os.path.exists(s_final) and os.path.exists(c):
