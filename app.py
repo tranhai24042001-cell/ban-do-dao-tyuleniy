@@ -119,7 +119,7 @@ def process_img(s, c):
             dst_crs, dst_tr, w, h = ref.crs, ref.transform, ref.width, ref.height
             kw = ref.meta.copy()
         with rasterio.open(s) as src:
-            # FIX LỖI DTYPE: Dùng dtypes[0]
+            # --- FIX QUAN TRỌNG: Dùng dtypes[0] ---
             dt = src.dtypes[0] if isinstance(src.dtypes, (list, tuple)) else src.dtypes
             kw.update({'crs': dst_crs, 'transform': dst_tr, 'width': w, 'height': h, 'count': src.count, 'dtype': dt, 'driver': 'GTiff'})
             with rasterio.open(o, 'w', **kw) as dst:
@@ -158,28 +158,42 @@ def render_main_map(year):
 m_main = render_main_map(selected_year_main)
 m_main.to_streamlit(height=500)
 
-# --- PHẦN SO SÁNH (FIX LỖI) ---
-st.markdown("---"); st.subheader("🔍 Сравнение изображений (So sánh độc lập)")
-c1, c2 = st.columns(2)
+# ====================================================================
+# --- 8. PHẦN SO SÁNH (ĐÃ SỬA: DÙNG LAYER CONTROL) ---
+# ====================================================================
+st.markdown("---")
+st.subheader("🔍 Сравнение изображений (So sánh độc lập)")
+
+col_comp1, col_comp2 = st.columns(2)
+
 def render_sub_map_independent(key_suffix):
     c_y, c_t = st.columns([1, 1])
-    with c_y: y = st.selectbox("Год:", available_years, key=f"y_{key_suffix}")
-    with c_t: t = st.selectbox("Тип:", ["Спутник", "Классификация"], key=f"t_{key_suffix}")
+    with c_y: y = st.selectbox("Год:", available_years, key=f"year_{key_suffix}")
+    with c_t: t = st.selectbox("Тип:", ["Спутник", "Классификация"], key=f"type_{key_suffix}")
     p = f"data/{y}/satellite.tif" if "Спутник" in t else f"data/{y}/landcover.tif"
     
-    ms = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, scale_control=True)
+    ms = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, scale_control=True, tiles="OpenStreetMap")
+    
     if os.path.exists(p):
         try:
+            # FIX: Dùng add_raster an toàn
             ms.add_raster(p, layer_name="Image", zoom_to_layer=False)
             ms.add_layer_control()
         except Exception:
-            # Lỗi xảy ra là do localtileserver không chạy
+            # Thông báo lỗi chung thay vì lỗi localtileserver
             st.error("Lỗi hiển thị ảnh: Vui lòng kiểm tra lại cấu hình thư viện.")
+    
     ms.to_streamlit(height=400)
 
-with c1: st.markdown('<div class="comp-header">Cửa sổ 1</div>', unsafe_allow_html=True); render_sub_map_independent("left")
-with c2: st.markdown('<div class="comp-header">Cửa sổ 2</div>', unsafe_allow_html=True); render_sub_map_independent("right")
+with col_comp1:
+    st.markdown('<div class="comp-header">Cửa sổ 1</div>', unsafe_allow_html=True)
+    render_sub_map_independent("left")
 
-# --- INFO ---
-st.markdown("---"); st.subheader("ℹ️ Обзор острова Тюлений")
-st.markdown("""<div class="info-card"><h3>Остров Тюлений</h3><p>Остров Тюлений — песчаный остров в северо-западной части Каспийского моря.</p><h4>1. 📍 География</h4><ul><li><b>Расположение:</b> 47 км от Дагестана.</li><li><b>Размеры:</b> Длина 8-10 km.</li></ul><h4>2. 🏜️ Климат</h4><ul><li>Полупустынный, засушливый.</li></ul><h4>3. 🌿 Экосистема</h4><ul><li>Важное лежбище каспийского тюленя и место гнездования птиц.</li></ul></div>""", unsafe_allow_html=True)
+with col_comp2:
+    st.markdown('<div class="comp-header">Cửa sổ 2</div>', unsafe_allow_html=True)
+    render_sub_map_independent("right")
+
+# --- 9. THÔNG TIN ĐẢO ---
+st.markdown("---")
+st.subheader("ℹ️ Обзор острова Тюлений")
+st.markdown("""<div class="info-card"><h3>Остров Тюлений</h3><p>Остров Тюлений — песчаный остров в северо-западной части Каспийского моря.</p><h4>1. 📍 География</h4><ul><li><b>Расположение:</b> 47 km от Дагестана.</li><li><b>Размеры:</b> Длина 8-10 km.</li></ul><h4>2. 🏜️ Климат</h4><ul><li>Полупустынный, засушливый.</li></ul><h4>3. 🌿 Экосистема</h4><ul><li>Важное лежбище каспийского тюленя и место гнездования птиц.</li></ul></div>""", unsafe_allow_html=True)
