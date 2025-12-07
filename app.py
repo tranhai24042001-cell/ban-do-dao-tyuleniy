@@ -13,14 +13,13 @@ from folium import MacroElement
 from branca.element import Template
 # ------------------------------
 
-# --- 1. CẤU HÌNH TRANG ---
 st.set_page_config(layout="wide", page_title="WebGIS Monitoring - Остров Тюлений")
 
-# Tọa độ trung tâm đảo Tyuleniy
+# Tọa độ trung tâm
 TARGET_CENTER = [44.475, 47.513]
 TARGET_ZOOM = 13
 
-# --- CSS TÙY CHỈNH ---
+# CSS
 st.markdown("""
     <style>
         .block-container {padding-top: 1rem;}
@@ -35,112 +34,74 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. HÀM ĐỌC DỮ LIỆU ---
 @st.cache_data
 def load_data():
     try:
         df = pd.read_excel("so_lieu_thong_ke.xlsx", engine='openpyxl')
-        cols_to_fix = ['Длина', 'Вода', 'Почва', 'Водно-полотные', 'Растения']
-        for col in cols_to_fix:
-            if col in df.columns:
-                df[col] = df[col].astype(str).str.replace(',', '.').apply(pd.to_numeric, errors='coerce')
+        cols = ['Длина', 'Вода', 'Почва', 'Водно-полотные', 'Растения']
+        for c in cols:
+            if c in df.columns: df[c] = df[c].astype(str).str.replace(',', '.').apply(pd.to_numeric, errors='coerce')
         if 'Год' in df.columns:
             df['Year_Str'] = df['Год'].astype(str)
             df = df.set_index("Год")
         return df
-    except Exception:
-        return None
+    except: return None
 
 df_stats = load_data()
 
-# --- 3. MENU BÊN TRÁI (CHỈ ĐIỀU KHIỂN BẢN ĐỒ CHÍNH) ---
 with st.sidebar:
-    st.header("BẢN ĐỒ CHÍNH (MAIN MAP)")
+    st.header("ВЫБЕРИТЕ ГОД (CHỌN NĂM)")
+    years = []
+    if os.path.exists("data"): years = sorted([d for d in os.listdir("data") if os.path.isdir(os.path.join("data", d))])
     
-    available_years = []
-    if os.path.exists("data"):
-        available_years = sorted([d for d in os.listdir("data") if os.path.isdir(os.path.join("data", d))])
-    if not available_years and df_stats is not None:
-        available_years = sorted(df_stats.index.tolist())
-    if not available_years: available_years = [2024]
+    if not years and df_stats is not None: years = sorted(df_stats.index.tolist())
+    if not years: years = [2024]
     
-    selected_year_main = st.selectbox("Chọn năm hiển thị chính:", available_years, index=len(available_years)-1, key="main_year_selector")
-    
+    sel_year = st.selectbox("Год:", years, index=len(years)-1, key="main_year")
     st.markdown("---")
-
-    # Số liệu thống kê (Theo năm chính)
-    coastline_val = 0
-    data_table = {"Классификация": [], "Площадь (га)": []}
-    if df_stats is not None and int(selected_year_main) in df_stats.index:
-        row = df_stats.loc[int(selected_year_main)]
-        coastline_val = row.get('Длина', 0)
-        data_table = {
+    
+    val = 0
+    dt = {"Классификация": [], "Площадь (га)": []}
+    if df_stats is not None and int(sel_year) in df_stats.index:
+        r = df_stats.loc[int(sel_year)]
+        val = r.get('Длина', 0)
+        dt = {
             "Классификация": ["Вода", "Почва", "Водно-болотные", "Растения"],
-            "Площадь (га)": [
-                f"{row.get('Вода', 0):,.2f}", f"{row.get('Почва', 0):,.2f}",
-                f"{row.get('Водно-полотные', 0):,.2f}", f"{row.get('Растения', 0):,.2f}"
-            ]
+            "Площадь (га)": [f"{r.get('Вода', 0):,.2f}", f"{r.get('Почва', 0):,.2f}", f"{r.get('Водно-полотные', 0):,.2f}", f"{r.get('Растения', 0):,.2f}"]
         }
-
-    st.subheader("Статистика (Thống kê)")
-    st.markdown(f"""
-    <div class="stat-box">
-        <b>📏 Длина береговой линии:</b><br>
-        <span style="font-size: 24px; color: blue; font-weight: bold;">{coastline_val:,.2f} km</span>
-    </div>
-    """, unsafe_allow_html=True)
+    
+    st.subheader("Статистика")
+    st.markdown(f"<div class='stat-box'><b>📏 Длина береговой линии:</b><br><span style='font-size: 24px; color: blue; font-weight: bold;'>{val:,.2f} km</span></div>", unsafe_allow_html=True)
     st.markdown("<b>🌳 Детализация площади:</b>", unsafe_allow_html=True)
-    st.dataframe(data_table, hide_index=True)
-
-    # Biểu đồ
+    st.dataframe(dt, hide_index=True)
+    
     st.markdown("---")
     st.subheader("📊 Динамика изменений")
-    def make_bar_chart(data, y_col, color_hex, title, y_label):
-        bars = alt.Chart(data).mark_bar(color=color_hex).encode(
-            x=alt.X('Year_Str', title=None, axis=alt.Axis(labels=False)),
-            y=alt.Y(y_col, title=None),
-            tooltip=['Year_Str', alt.Tooltip(y_col, title=y_label, format=",.2f")]
-        )
-        text = bars.mark_text(align='center', baseline='bottom', dy=-5, color='black', fontSize=10).encode(text=alt.Text(y_col, format=",.0f"))
-        return (bars + text).properties(title=title, height=150)
-
     if df_stats is not None:
-        chart_data = df_stats.reset_index()
-        col1, col2 = st.sidebar.columns(2)
-        with col1: st.altair_chart(make_bar_chart(chart_data, 'Длина', '#0000FF', 'Длина (km)', 'км'), use_container_width=True)
-        with col2: st.altair_chart(make_bar_chart(chart_data, 'Почва', '#D2691E', 'Почва (ha)', 'га'), use_container_width=True)
-        col3, col4 = st.sidebar.columns(2)
-        with col3: st.altair_chart(make_bar_chart(chart_data, 'Водно-полотные', '#00CED1', 'Водно-болотные (ha)', 'га'), use_container_width=True)
-        with col4: st.altair_chart(make_bar_chart(chart_data, 'Растения', '#228B22', 'Растения (ha)', 'га'), use_container_width=True)
+        cd = df_stats.reset_index()
+        def chart(d, y, c, t):
+            b = alt.Chart(d).mark_bar(color=c).encode(x=alt.X('Year_Str', axis=alt.Axis(labels=False), title=None), y=alt.Y(y, title=None), tooltip=['Year_Str', y])
+            return (b + b.mark_text(align='center', dy=-5, color='black').encode(text=alt.Text(y, format=",.0f"))).properties(title=t, height=150)
+        
+        c1, c2 = st.sidebar.columns(2)
+        with c1: st.altair_chart(chart(cd, 'Длина', '#0000FF', 'Длина (km)'), use_container_width=True)
+        with c2: st.altair_chart(chart(cd, 'Почва', '#D2691E', 'Почва (ha)'), use_container_width=True)
+        c3, c4 = st.sidebar.columns(2)
+        with c3: st.altair_chart(chart(cd, 'Водно-полотные', '#00CED1', 'Водно-болотные'), use_container_width=True)
+        with c4: st.altair_chart(chart(cd, 'Растения', '#228B22', 'Растения (ha)'), use_container_width=True)
 
-# --- 4. TIÊU ĐỀ ---
-st.title(f"Остров Тюлений - {selected_year_main}")
+st.title(f"Остров Тюлений - {sel_year}")
 
-# --- 5. TẠO NÚT ZOOM (SVG) ---
-zoom_icon_svg = """
-<svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-<circle cx="12" cy="12" r="10" stroke="#444" stroke-width="2" fill="white" fill-opacity="0.8"/>
-<line x1="12" y1="2" x2="12" y2="22" stroke="#444" stroke-width="2"/>
-<line x1="2" y1="12" x2="22" y2="12" stroke="#444" stroke-width="2"/>
-<circle cx="12" cy="12" r="2" fill="#444"/>
-</svg>
-"""
+# Zoom Button
+zoom_svg = """<svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10" stroke="#444" stroke-width="2" fill="white" fill-opacity="0.8"/><line x1="12" y1="2" x2="12" y2="22" stroke="#444" stroke-width="2"/><line x1="2" y1="12" x2="22" y2="12" stroke="#444" stroke-width="2"/><circle cx="12" cy="12" r="2" fill="#444"/></svg>"""
 class ZoomButton(MacroElement):
     _template = Template("""
         {% macro script(this, kwargs) %}
             L.Control.ZoomButton = L.Control.extend({
                 onAdd: function(map) {
                     var btn = L.DomUtil.create('button', 'leaflet-bar leaflet-control');
-                    btn.innerHTML = `""" + zoom_icon_svg + """`;
-                    btn.style.width = '34px';
-                    btn.style.height = '34px';
-                    btn.style.backgroundColor = 'white';
-                    btn.style.cursor = 'pointer';
-                    btn.style.border = '2px solid rgba(0,0,0,0.2)';
-                    btn.style.display = 'flex';
-                    btn.style.alignItems = 'center';
-                    btn.style.justifyContent = 'center';
-                    btn.title = 'Zoom to Island';
+                    btn.innerHTML = `""" + zoom_svg + """`;
+                    btn.style.width = '34px'; btn.style.height = '34px'; btn.style.backgroundColor = 'white'; btn.style.cursor = 'pointer'; btn.style.border = '2px solid rgba(0,0,0,0.2)'; btn.style.display = 'flex'; btn.style.alignItems = 'center'; btn.style.justifyContent = 'center'; btn.title = 'Zoom to Island';
                     btn.onclick = function() { map.setView([44.475, 47.513], 13); };
                     return btn;
                 }
@@ -149,130 +110,76 @@ class ZoomButton(MacroElement):
         {% endmacro %}
     """)
 
-# --- 6. HÀM XỬ LÝ ẢNH ---
-def process_matched_image(sat_path, class_path):
-    output_path = sat_path.replace(".tif", "_matched.tif")
-    if os.path.exists(output_path): return output_path
+# Process Image Fix
+def process_img(s, c):
+    o = s.replace(".tif", "_matched.tif")
+    if os.path.exists(o): return o
     try:
-        with rasterio.open(class_path) as ref:
-            dst_crs, dst_transform = ref.crs, ref.transform
-            dst_width, dst_height = ref.width, ref.height
-            kwargs = ref.meta.copy()
-        with rasterio.open(sat_path) as src:
+        with rasterio.open(c) as ref:
+            dst_crs, dst_tr, w, h = ref.crs, ref.transform, ref.width, ref.height
+            kw = ref.meta.copy()
+        with rasterio.open(s) as src:
             # FIX LỖI DTYPE: Dùng dtypes[0]
-            dtype_val = src.dtypes[0] if isinstance(src.dtypes, (list, tuple)) else src.dtypes
-            kwargs.update({'crs': dst_crs, 'transform': dst_transform, 'width': dst_width, 'height': dst_height, 'count': src.count, 'dtype': dtype_val, 'driver': 'GTiff'})
-            with rasterio.open(output_path, 'w', **kwargs) as dst:
-                for i in range(1, src.count + 1):
-                    reproject(source=rasterio.band(src, i), destination=rasterio.band(dst, i), src_transform=src.transform, src_crs=src.crs, dst_transform=dst_transform, dst_crs=dst_crs, resampling=Resampling.nearest)
-        return output_path
-    except Exception: return sat_path 
+            dt = src.dtypes[0] if isinstance(src.dtypes, (list, tuple)) else src.dtypes
+            kw.update({'crs': dst_crs, 'transform': dst_tr, 'width': w, 'height': h, 'count': src.count, 'dtype': dt, 'driver': 'GTiff'})
+            with rasterio.open(o, 'w', **kw) as dst:
+                for i in range(1, src.count+1):
+                    reproject(source=rasterio.band(src, i), destination=rasterio.band(dst, i), src_transform=src.transform, src_crs=src.crs, dst_transform=dst_tr, dst_crs=dst_crs, resampling=Resampling.nearest)
+        return o
+    except: return s
 
-# --- 7. BẢN ĐỒ CHÍNH (FIX LỖI SPLIT MAP) ---
+# --- 7. BẢN ĐỒ CHÍNH (ĐÃ SỬA: DÙNG LAYER CONTROL THAY CHO SPLIT MAP) ---
 def render_main_map(year):
     original_sat_path = f"data/{year}/satellite.tif"
     class_path = f"data/{year}/landcover.tif"
     sat_path = process_matched_image(original_sat_path, class_path) if os.path.exists(original_sat_path) and os.path.exists(class_path) else original_sat_path
 
-    # Khởi tạo Map
     m = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, fullscreen_control=True, scale_control=True, tiles=None)
-    m.add_tile_layer(url="https://https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", name="Google Satellite", attribution="Google", overlay=True, shown=False)
+    m.add_tile_layer(url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", name="Google Satellite", attribution="Google", overlay=True, shown=False)
     m.add_tile_layer(url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", name="OpenStreetMap", attribution="OpenStreetMap", overlay=True, shown=False)
-    
-    # === THAY THẾ SPLIT MAP BẰNG ADD_RASTER VÀ LAYER CONTROL (ỔN ĐỊNH) ===
+
     if os.path.exists(sat_path) and os.path.exists(class_path):
         # Ảnh 1: Ảnh vệ tinh (Tắt hiện thị ban đầu)
         m.add_raster(sat_path, layer_name=f"Спутник ({year})", shown=False)
         # Ảnh 2: Phân loại (Hiện thị mặc định)
         m.add_raster(class_path, layer_name=f"Классификация ({year})", shown=True)
-        # Thêm Layer Control để bật/tắt 2 lớp ảnh
+        # Thêm Layer Control để bật/tắt 2 lớp ảnh (ổn định hơn Split Map)
         m.add_layer_control() 
     else:
         st.warning(f"Chưa tìm thấy ảnh năm {year}")
 
     m.add_child(ZoomButton())
 
-    legend_html = """
-    <div style="position: fixed; bottom: 30px; right: 10px; width: 170px; background-color: white; border: 2px solid #333; z-index:9999; font-size:14px; padding: 10px; opacity: 0.95; font-family: Arial, sans-serif;">
-        <b style="color:black; display:block; margin-bottom:5px; border-bottom:1px solid #ccc; padding-bottom:3px;">&#1050;&#1083;&#1072;&#1089;&#1089;&#1080;&#1092;&#1080;&#1082;&#1072;&#1094;&#1080;&#1103;</b>
-        <div style="margin-bottom:4px;"><span style="background:blue; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1042;&#1086;&#1076;&#1072;</span></div>
-        <div style="margin-bottom:4px;"><span style="background:#D2691E; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1055;&#1086;&#1095;&#1074;&#1072;</span></div>
-        <div style="margin-bottom:4px;"><span style="background:#00CED1; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1042;&#1086;&#1076;&#1085;&#1086;-&#1073;&#1086;&#1083;&#1086;&#1090;.</span></div>
-        <div style="margin-bottom:4px;"><span style="background:green; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1056;&#1072;&#1089;&#1090;&#1077;&#1085;&#1080;&#1103;</span></div>
-        <div style="margin-top:6px; padding-top:4px; border-top:1px dashed #ccc;"><span style="border: 2px solid red; background:transparent; width:18px; height:12px; display:inline-block; margin-right:8px;"></span><span>&#1043;&#1088;&#1072;&#1085;&#1080;&#1094;&#1072;</span></div>
-    </div>
-    """
-    m.add_html(legend_html, position='bottomright')
+    # Legend Fix Font
+    legend = """<div style="position: fixed; bottom: 30px; right: 10px; width: 170px; background-color: white; border: 2px solid #333; z-index:9999; font-size:14px; padding: 10px; opacity: 0.95; font-family: Arial, sans-serif;"><b style="color:black; display:block; margin-bottom:5px; border-bottom:1px solid #ccc; padding-bottom:3px;">&#1050;&#1083;&#1072;&#1089;&#1089;&#1080;&#1092;&#1080;&#1082;&#1072;&#1094;&#1080;&#1103;</b><div style="margin-bottom:4px;"><span style="background:blue; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1042;&#1086;&#1076;&#1072;</span></div><div style="margin-bottom:4px;"><span style="background:#D2691E; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1055;&#1086;&#1095;&#1074;&#1072;</span></div><div style="margin-bottom:4px;"><span style="background:#00CED1; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1042;&#1086;&#1076;&#1085;&#1086;-&#1073;&#1086;&#1083;&#1086;&#1090;.</span></div><div style="margin-bottom:4px;"><span style="background:green; width:18px; height:18px; display:inline-block; margin-right:8px; border:1px solid #999;"></span><span>&#1056;&#1072;&#1089;&#1090;&#1077;&#1085;&#1080;&#1103;</span></div><div style="margin-top:6px; padding-top:4px; border-top:1px dashed #ccc;"><span style="border: 2px solid red; background:transparent; width:18px; height:12px; display:inline-block; margin-right:8px;"></span><span>&#1043;&#1088;&#1072;&#1085;&#1080;&#1094;&#1072;</span></div></div>"""
+    m.add_html(legend, position='bottomright')
     return m
 
-# Hiển thị bản đồ chính
 m_main = render_main_map(selected_year_main)
 m_main.to_streamlit(height=500)
 
-# ====================================================================
-# --- 8. PHẦN SO SÁNH (FIX LỖI) ---
-# ====================================================================
-st.markdown("---")
-st.subheader("🔍 Сравнение изображений (So sánh độc lập)")
-
-col_comp1, col_comp2 = st.columns(2)
-
+# --- PHẦN SO SÁNH (FIX LỖI) ---
+st.markdown("---"); st.subheader("🔍 Сравнение изображений (So sánh độc lập)")
+c1, c2 = st.columns(2)
 def render_sub_map_independent(key_suffix):
     c_y, c_t = st.columns([1, 1])
-    with c_y:
-        y_sel = st.selectbox("Год:", available_years, key=f"year_{key_suffix}")
-    with c_t:
-        t_sel = st.selectbox("Тип:", ["Спутник", "Классификация"], key=f"type_{key_suffix}")
+    with c_y: y = st.selectbox("Год:", available_years, key=f"y_{key_suffix}")
+    with c_t: t = st.selectbox("Тип:", ["Спутник", "Классификация"], key=f"t_{key_suffix}")
+    p = f"data/{y}/satellite.tif" if "Спутник" in t else f"data/{y}/landcover.tif"
     
-    final_path = f"data/{y_sel}/satellite.tif" if "Спутник" in t_sel else f"data/{y_sel}/landcover.tif"
-
-    m_sub = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, scale_control=True, tiles="OpenStreetMap")
-    
-    if os.path.exists(final_path):
+    ms = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, scale_control=True)
+    if os.path.exists(p):
         try:
-            # Dùng add_raster thay vì add_raster_split
-            m_sub.add_raster(final_path, layer_name="Image", zoom_to_layer=False)
-            m_sub.add_layer_control()
+            ms.add_raster(p, layer_name="Image", zoom_to_layer=False)
+            ms.add_layer_control()
         except Exception:
             # Lỗi xảy ra là do localtileserver không chạy
             st.error("Lỗi hiển thị ảnh: Vui lòng kiểm tra lại cấu hình thư viện.")
-    else:
-        st.warning(f"Không tìm thấy ảnh {y_sel}")
-    
-    m_sub.to_streamlit(height=400)
+    ms.to_streamlit(height=400)
 
-with col_comp1:
-    st.markdown('<div class="comp-header">Cửa sổ 1</div>', unsafe_allow_html=True)
-    render_sub_map_independent("left")
+with c1: st.markdown('<div class="comp-header">Cửa sổ 1</div>', unsafe_allow_html=True); render_sub_map_independent("left")
+with c2: st.markdown('<div class="comp-header">Cửa sổ 2</div>', unsafe_allow_html=True); render_sub_map_independent("right")
 
-with col_comp2:
-    st.markdown('<div class="comp-header">Cửa sổ 2</div>', unsafe_allow_html=True)
-    render_sub_map_independent("right")
-
-# --- 9. THÔNG TIN ĐẢO ---
-st.markdown("---")
-st.subheader("ℹ️ Обзор острова Тюлений")
-st.markdown("""
-<div class="info-card">
-    <h3>Остров Тюлений (Tyuleniy Island)</h3>
-    <p>Остров Тюлений — песчаный остров в северо-западной части Каспийского моря. Đây là một khu vực có ý nghĩa đặc biệt quan trọng về mặt sinh thái và đa dạng sinh học.</p>
-
-    <h4>1. 📍 География и Административное положение</h4>
-    <ul>
-        <li><b>Расположение:</b> 47 км к востоку от побережья Дагестана, у входа в Кизлярский залив.</li>
-        <li><b>Координаты:</b> 44°29′ с.ш., 47°31′ в.д.</li>
-    </ul>
-
-    <h4>2. 🏜️ Рельеф и Климат</h4>
-    <ul>
-        <li><b>Рельеф:</b> Низменный, песчаный, với các bãi lầy và cồn cát.</li>
-        <li><b>Климат:</b> Полупустынный, khô hạn.</li>
-    </ul>
-
-    <h4>3. 🌿 Экосистема</h4>
-    <ul>
-        <li><b>Каспийский тюлень (Pusa caspica):</b> Vẫn là nơi quan trọng để hải cẩu nghỉ ngơi và sinh sản.</li>
-        <li><b>Khu vực Chim quan trọng (IBA):</b> Nơi trú đông và làm tổ của nhiều loài chim quý hiếm.</li>
-    </ul>
-</div>
-""", unsafe_allow_html=True)
+# --- INFO ---
+st.markdown("---"); st.subheader("ℹ️ Обзор острова Тюлений")
+st.markdown("""<div class="info-card"><h3>Остров Тюлений</h3><p>Остров Тюлений — песчаный остров в северо-западной части Каспийского моря.</p><h4>1. 📍 География</h4><ul><li><b>Расположение:</b> 47 км от Дагестана.</li><li><b>Размеры:</b> Длина 8-10 km.</li></ul><h4>2. 🏜️ Климат</h4><ul><li>Полупустынный, засушливый.</li></ul><h4>3. 🌿 Экосистема</h4><ul><li>Важное лежбище каспийского тюленя и место гнездования птиц.</li></ul></div>""", unsafe_allow_html=True)
