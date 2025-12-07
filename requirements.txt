@@ -1,0 +1,10 @@
+streamlit
+leafmap
+pandas
+altair
+openpyxl
+rasterio
+folium
+branca
+xarray
+rioxarray
