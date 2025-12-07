@@ -192,9 +192,15 @@ class ZoomButton(MacroElement):
     """)
 
 # --- 6. HÀM XỬ LÝ ẢNH ---
+@st.cache_resource # Sử dụng cache resource để tránh lỗi re-run và load lại
 def process_matched_image(sat_path, class_path):
-    output_path = sat_path.replace(".tif", "_matched.tif")
+    # Sử dụng tên tệp đã được xử lý (ví dụ: data/2022/satellite_matched.tif)
+    output_path = os.path.join(os.path.dirname(sat_path), f"satellite_matched.tif")
     
+    if not os.path.exists(sat_path) or not os.path.exists(class_path):
+        # Trả về đường dẫn gốc nếu thiếu tệp đầu vào
+        return sat_path
+
     # KHÔNG CẦN TẠO LẠI TỆP NẾU NÓ ĐÃ TỒN TẠI
     if os.path.exists(output_path): 
         return output_path
@@ -216,7 +222,6 @@ def process_matched_image(sat_path, class_path):
         return output_path
         
     except Exception as e:
-        # Nếu việc xử lý lỗi, trả về đường dẫn gốc
         st.warning(f"Ошибка при обработке изображения: {e}") 
         return sat_path 
 
@@ -228,13 +233,13 @@ def render_main_map(year, opacity):
     sat_path_exists = os.path.exists(original_sat_path)
     class_path_exists = os.path.exists(class_path)
     
-    # 1. TẠO BẢN ĐỒ VỚI TRẠNG THÁI ĐÃ LƯU
+    # Lấy trạng thái bản đồ đã lưu từ session state
     center = st.session_state.map_center
     zoom = st.session_state.map_zoom
     
     m = leafmap.Map(center=center, zoom=zoom, draw_control=False, measure_control=False, fullscreen_control=True, scale_control=True, tiles=None)
     
-    # 2. Thêm lớp nền vệ tinh (PHẢI BẬT VÀ NẰM DƯỚI CÙNG)
+    # 1. Thêm lớp nền vệ tinh
     m.add_tile_layer(url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", name="Google Satellite", attribution="Google", overlay=True, shown=True)
     m.add_tile_layer(url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", name="OpenStreetMap", attribution="OpenStreetMap", overlay=True, shown=False)
     
@@ -245,18 +250,19 @@ def render_main_map(year, opacity):
         # Xử lý và lấy đường dẫn của ảnh vệ tinh đã khớp
         matched_sat_path = process_matched_image(original_sat_path, class_path)
         
-        # Thêm lớp ảnh vệ tinh raster đã xử lý (nằm trên lớp nền Google)
+        # 2. Thêm lớp ảnh vệ tinh raster đã xử lý (nằm trên lớp nền Google)
         try:
-             # Add satellite raster layer (Optional, but useful for comparison)
+             # Đảm bảo lớp này có mặt
              m.add_raster(matched_sat_path, layer_name=f"Спутник {year} (Raster)", opacity=1.0, shown=False) 
         except Exception:
              st.warning(f"Не удалось загрузить растровое спутниковое изображение за {year} год")
         
-        # Thêm lớp phân loại (Luôn nằm trên cùng, Áp dụng Opacity từ thanh trượt)
+        # 3. Thêm lớp phân loại (Luôn nằm trên cùng, Áp dụng Opacity từ thanh trượt)
         try:
             m.add_raster(class_path, layer_name=CLASSIFICATION_LAYER_NAME, opacity=opacity, shown=True) 
         except Exception:
              st.warning(f"Не удалось загрузить слой классификации за {year} год")
+
     else:
         st.warning(f"Не найдено изображение за {year} год. Проверьте файлы: satellite.tif и landcover.tif")
 
