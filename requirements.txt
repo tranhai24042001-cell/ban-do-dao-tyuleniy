@@ -9,4 +9,4 @@ branca
 xarray
 rioxarray
 localtileserver
-psutil  <-- (Thư viện cần thiết cho localtileserver)
+psutil
