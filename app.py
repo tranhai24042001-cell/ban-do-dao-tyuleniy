@@ -8,10 +8,10 @@ import altair as alt
 import rasterio
 from rasterio.warp import reproject, Resampling
 
-# --- IMPORT MODULE BẮT BUỘC ---
+# --- [SỬA LỖI 2] IMPORT MODULE CÒN THIẾU ---
 from folium import MacroElement
 from branca.element import Template
-# ------------------------------
+# -------------------------------------------
 
 # --- 1. CẤU HÌNH TRANG ---
 st.set_page_config(layout="wide", page_title="WebGIS Monitoring - Остров Тюлений")
@@ -46,8 +46,6 @@ st.markdown("""
         .info-card h4 { color: #007bff; margin-top: 15px; margin-bottom: 5px; font-weight: bold; }
         .info-card ul { margin-left: 20px; margin-bottom: 10px; }
         .info-card li { margin-bottom: 5px; }
-        
-        .comp-header { font-weight: bold; text-align: center; color: #555; margin-bottom: 5px;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -69,27 +67,27 @@ def load_data():
 
 df_stats = load_data()
 
-# --- 3. MENU BÊN TRÁI (CHỈ ĐIỀU KHIỂN BẢN ĐỒ CHÍNH) ---
+# --- 3. MENU BÊN TRÁI & BIỂU ĐỒ ---
 with st.sidebar:
-    st.header("BẢN ĐỒ CHÍNH (MAIN MAP)")
+    st.header("ВЫБЕРИТЕ ГОД (CHỌN NĂM)")
     
     available_years = []
     if os.path.exists("data"):
         available_years = sorted([d for d in os.listdir("data") if os.path.isdir(os.path.join("data", d))])
+    
     if not available_years and df_stats is not None:
         available_years = sorted(df_stats.index.tolist())
     if not available_years: available_years = [2024]
     
-    # Biến này chỉ dành cho Bản đồ chính
-    selected_year_main = st.selectbox("Chọn năm hiển thị chính:", available_years, index=len(available_years)-1, key="main_year_selector")
-    
+    selected_year = st.selectbox("Год:", available_years, index=len(available_years)-1)
     st.markdown("---")
 
-    # Số liệu thống kê (Theo năm chính)
+    # Số liệu thống kê
     coastline_val = 0
     data_table = {"Классификация": [], "Площадь (га)": []}
-    if df_stats is not None and int(selected_year_main) in df_stats.index:
-        row = df_stats.loc[int(selected_year_main)]
+    
+    if df_stats is not None and int(selected_year) in df_stats.index:
+        row = df_stats.loc[int(selected_year)]
         coastline_val = row.get('Длина', 0)
         data_table = {
             "Классификация": ["Вода", "Почва", "Водно-болотные", "Растения"],
@@ -99,19 +97,21 @@ with st.sidebar:
             ]
         }
 
-    st.subheader("Статистика (Thống kê)")
+    st.subheader("Статистика")
     st.markdown(f"""
     <div class="stat-box">
         <b>📏 Длина береговой линии:</b><br>
         <span style="font-size: 24px; color: blue; font-weight: bold;">{coastline_val:,.2f} km</span>
     </div>
     """, unsafe_allow_html=True)
+    
     st.markdown("<b>🌳 Детализация площади:</b>", unsafe_allow_html=True)
     st.dataframe(data_table, hide_index=True)
 
     # Biểu đồ
     st.markdown("---")
     st.subheader("📊 Динамика изменений")
+    
     def make_bar_chart(data, y_col, color_hex, title, y_label):
         bars = alt.Chart(data).mark_bar(color=color_hex).encode(
             x=alt.X('Year_Str', title=None, axis=alt.Axis(labels=False)),
@@ -131,9 +131,9 @@ with st.sidebar:
         with col4: st.altair_chart(make_bar_chart(chart_data, 'Растения', '#228B22', 'Растения (ha)', 'га'), use_container_width=True)
 
 # --- 4. TIÊU ĐỀ ---
-st.title(f"Остров Тюлений - {selected_year_main}")
+st.title(f"Остров Тюлений - {selected_year}")
 
-# --- 5. TẠO NÚT ZOOM (SVG) ---
+# --- 5. TẠO NÚT ZOOM ---
 zoom_icon_svg = """
 <svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
 <circle cx="12" cy="12" r="10" stroke="#444" stroke-width="2" fill="white" fill-opacity="0.8"/>
@@ -166,28 +166,51 @@ class ZoomButton(MacroElement):
         {% endmacro %}
     """)
 
-# --- 6. HÀM XỬ LÝ ẢNH ---
+# --- 6. HÀM XỬ LÝ ẢNH (SỬA LỖI DTYPE TẠI ĐÂY) ---
 def process_matched_image(sat_path, class_path):
     output_path = sat_path.replace(".tif", "_matched.tif")
     if os.path.exists(output_path): return output_path
+    
     try:
         with rasterio.open(class_path) as ref:
             dst_crs, dst_transform = ref.crs, ref.transform
             dst_width, dst_height = ref.width, ref.height
             kwargs = ref.meta.copy()
+        
         with rasterio.open(sat_path) as src:
+            # [SỬA LỖI 1] Dùng src.dtypes[0] thay vì src.dtype
             dtype_val = src.dtypes[0] if isinstance(src.dtypes, (list, tuple)) else src.dtypes
-            kwargs.update({'crs': dst_crs, 'transform': dst_transform, 'width': dst_width, 'height': dst_height, 'count': src.count, 'dtype': dtype_val, 'driver': 'GTiff'})
+            
+            kwargs.update({
+                'crs': dst_crs, 
+                'transform': dst_transform, 
+                'width': dst_width, 
+                'height': dst_height, 
+                'count': src.count, 
+                'dtype': dtype_val, 
+                'driver': 'GTiff'
+            })
+            
             with rasterio.open(output_path, 'w', **kwargs) as dst:
                 for i in range(1, src.count + 1):
-                    reproject(source=rasterio.band(src, i), destination=rasterio.band(dst, i), src_transform=src.transform, src_crs=src.crs, dst_transform=dst_transform, dst_crs=dst_crs, resampling=Resampling.nearest)
+                    reproject(
+                        source=rasterio.band(src, i), 
+                        destination=rasterio.band(dst, i), 
+                        src_transform=src.transform, 
+                        src_crs=src.crs, 
+                        dst_transform=dst_transform, 
+                        dst_crs=dst_crs, 
+                        resampling=Resampling.nearest
+                    )
         return output_path
-    except Exception: return sat_path 
+    except Exception as e:
+        return sat_path 
 
-# --- 7. BẢN ĐỒ CHÍNH (ĐỘC LẬP) ---
-def render_main_map(year):
+# --- 7. BẢN ĐỒ CHÍNH ---
+def render_map(year):
     original_sat_path = f"data/{year}/satellite.tif"
     class_path = f"data/{year}/landcover.tif"
+    
     sat_path = process_matched_image(original_sat_path, class_path) if os.path.exists(original_sat_path) and os.path.exists(class_path) else original_sat_path
 
     m = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, fullscreen_control=True, scale_control=True, tiles=None)
@@ -201,6 +224,7 @@ def render_main_map(year):
 
     m.add_child(ZoomButton())
 
+    # [SỬA LỖI 3] Legend dùng mã HTML Entities để không lỗi font Nga
     legend_html = """
     <div style="position: fixed; bottom: 30px; right: 10px; width: 170px; background-color: white; border: 2px solid #333; z-index:9999; font-size:14px; padding: 10px; opacity: 0.95; font-family: Arial, sans-serif;">
         <b style="color:black; display:block; margin-bottom:5px; border-bottom:1px solid #ccc; padding-bottom:3px;">&#1050;&#1083;&#1072;&#1089;&#1089;&#1080;&#1092;&#1080;&#1082;&#1072;&#1094;&#1080;&#1103;</b>
@@ -214,61 +238,42 @@ def render_main_map(year):
     m.add_html(legend_html, position='bottomright')
     return m
 
-# Hiển thị bản đồ chính
-m_main = render_main_map(selected_year_main)
-m_main.to_streamlit(height=500)
+m = render_map(selected_year)
+m.to_streamlit(height=600)
 
-# ====================================================================
-# --- 8. PHẦN SO SÁNH (ĐỘC LẬP HOÀN TOÀN) ---
-# ====================================================================
-col_comp1, col_comp2 = st.columns(2)
-
-def render_sub_map_independent(key_suffix):
-    # Mỗi ô có menu riêng, dùng KEY riêng (key_suffix) để không bị trùng
-    c_y, c_t = st.columns([1, 1])
-    with c_y:
-        # Biến năm riêng cho ô này
-        y_sel = st.selectbox("Год:", available_years, key=f"year_{key_suffix}")
-    with c_t:
-        # Biến loại ảnh riêng cho ô này
-        t_sel = st.selectbox("Тип:", ["Спутник", "Классификация"], key=f"type_{key_suffix}")
-    
-    final_path = None
-    if "Спутник" in t_sel: 
-        final_path = f"data/{y_sel}/satellite.tif"
-    else: 
-        final_path = f"data/{y_sel}/landcover.tif"
-
-    m_sub = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, scale_control=True, tiles="OpenStreetMap")
-    
-    if final_path and os.path.exists(final_path):
-        try:
-            m_sub.add_raster(final_path, layer_name="Image", zoom_to_layer=False)
-        except Exception as e:
-            st.error("Cần cài thư viện: pip install xarray rioxarray")
-    else:
-        st.warning(f"Không có ảnh {y_sel}")
-    
-    m_sub.to_streamlit(height=400)
-
-# Gọi hàm render cho 2 cột với key khác nhau ("left" và "right")
-# Điều này đảm bảo chúng độc lập với nhau và độc lập với Main Map
-with col_comp1:
-    st.markdown('<div class="comp-header"></div>', unsafe_allow_html=True)
-    render_sub_map_independent("left")
-
-with col_comp2:
-    st.markdown('<div class="comp-header"></div>', unsafe_allow_html=True)
-    render_sub_map_independent("right")
-# ====================================================================
-
-# --- 9. THÔNG TIN ĐẢO ---
-# [FIX LỖI 3] Đảm bảo unsafe_allow_html=True để render thẻ HTML
+# --- 8. THÔNG TIN ĐẢO ---
 st.markdown("---")
 st.subheader("ℹ️ Обзор острова Тюлений")
 st.markdown("""
 <div class="info-card">
     <h3>Остров Тюлений (Tyuleniy Island)</h3>
-    <p>Остров Тюлений — это песчаный остров, расположенный в северо-западной части Каспийского моря в 47 км от побережья Дагестана (Россия), который, несмотря на отсутствие постоянного населения, имеет исключительное экологическое значение как ключевое место обитания краснокнижных каспийских тюленей и гнездования редких видов птиц. Остров характеризуется низменным рельефом с неустойчивой формой, постоянно меняющейся под воздействием колебаний уровня моря и ветров, а также суровым полупустынным климатом; ранее здесь существовал рыбацкий поселок, но в настоящее время территория используется исключительно для работы гидрометеорологической станции и пограничных постов с целью мониторинга уникальной экосистемы..</p>
+    <p>Остров Тюлений (в переводе «Остров тюленей») — песчаный остров, расположенный в северо-западной части Каспийского моря. Это зона особого экологического значения и биоразнообразия.</p>
+
+    <h4>1. 📍 География и Административное положение</h4>
+    <ul>
+        <li><b>Расположение:</b> 47 км к востоку от побережья Дагестана, у входа в Кизлярский залив.</li>
+        <li><b>Координаты:</b> 44°29′ с.ш., 47°31′ в.д.</li>
+        <li><b>Администрация:</b> Республика Дагестан, РФ.</li>
+        <li><b>Размеры:</b> Длина 8–10 км, ширина до 6 км. Площадь сильно зависит от уровня моря.</li>
+    </ul>
+
+    <h4>2. 🏜️ Рельеф и Климат</h4>
+    <ul>
+        <li><b>Рельеф:</b> Низменный, песчаный, с солончаками и дюнами. Форма острова меняется из-за волн и ветра.</li>
+        <li><b>Климат:</b> Полупустынный, засушливый (<200 мм осадков/год).</li>
+    </ul>
+
+    <h4>3. 🌿 Экосистема</h4>
+    <ul>
+        <li><b>Каспийский тюлень (Pusa caspica):</b> Важное лежбище эндемика Красной книги.</li>
+        <li><b>Птицы (IBA):</b> Гнездование редких видов (кудрявый пеликан, баклан, стрепет).</li>
+        <li><b>Флора:</b> Тростник и галофиты.</li>
+    </ul>
+    
+    <h4>4. 🏚️ История и Население</h4>
+    <ul>
+        <li><b>Прошлое:</b> Был рыбацкий поселок, ныне заброшен из-за подъема воды.</li>
+        <li><b>Настоящее время:</b> Постоянного населения нет. Действуют метеостанция и посты пограничников.</li>
+    </ul>
 </div>
 """, unsafe_allow_html=True)
