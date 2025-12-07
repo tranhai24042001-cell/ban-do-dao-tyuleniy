@@ -25,28 +25,12 @@ st.markdown("""
     <style>
         .block-container {padding-top: 1rem;}
         h1 {text-align: center; color: #2c3e50;}
-        .stat-box {
-            background-color: #f8f9fa;
-            padding: 15px;
-            border-radius: 5px;
-            border: 1px solid #dee2e6;
-            margin-bottom: 10px;
-        }
-        .info-card {
-            background-color: #ffffff;
-            padding: 20px;
-            border-radius: 10px;
-            border: 1px solid #ddd;
-            margin-top: 20px;
-            font-family: 'Arial', sans-serif;
-            color: #333;
-            line-height: 1.6;
-        }
+        .stat-box { background-color: #f8f9fa; padding: 15px; border-radius: 5px; border: 1px solid #dee2e6; margin-bottom: 10px; }
+        .info-card { background-color: #ffffff; padding: 20px; border-radius: 10px; border: 1px solid #ddd; margin-top: 20px; font-family: 'Arial', sans-serif; color: #333; line-height: 1.6; }
         .info-card h3 { color: #2c3e50; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
         .info-card h4 { color: #007bff; margin-top: 15px; margin-bottom: 5px; font-weight: bold; }
         .info-card ul { margin-left: 20px; margin-bottom: 10px; }
         .info-card li { margin-bottom: 5px; }
-        
         .comp-header { font-weight: bold; text-align: center; color: #555; margin-bottom: 5px;}
     </style>
 """, unsafe_allow_html=True)
@@ -80,7 +64,6 @@ with st.sidebar:
         available_years = sorted(df_stats.index.tolist())
     if not available_years: available_years = [2024]
     
-    # Biến này chỉ dành cho Bản đồ chính
     selected_year_main = st.selectbox("Chọn năm hiển thị chính:", available_years, index=len(available_years)-1, key="main_year_selector")
     
     st.markdown("---")
@@ -176,6 +159,7 @@ def process_matched_image(sat_path, class_path):
             dst_width, dst_height = ref.width, ref.height
             kwargs = ref.meta.copy()
         with rasterio.open(sat_path) as src:
+            # FIX LỖI DTYPE: Dùng dtypes[0]
             dtype_val = src.dtypes[0] if isinstance(src.dtypes, (list, tuple)) else src.dtypes
             kwargs.update({'crs': dst_crs, 'transform': dst_transform, 'width': dst_width, 'height': dst_height, 'count': src.count, 'dtype': dtype_val, 'driver': 'GTiff'})
             with rasterio.open(output_path, 'w', **kwargs) as dst:
@@ -184,18 +168,25 @@ def process_matched_image(sat_path, class_path):
         return output_path
     except Exception: return sat_path 
 
-# --- 7. BẢN ĐỒ CHÍNH (ĐỘC LẬP) ---
+# --- 7. BẢN ĐỒ CHÍNH (FIX LỖI SPLIT MAP) ---
 def render_main_map(year):
     original_sat_path = f"data/{year}/satellite.tif"
     class_path = f"data/{year}/landcover.tif"
     sat_path = process_matched_image(original_sat_path, class_path) if os.path.exists(original_sat_path) and os.path.exists(class_path) else original_sat_path
 
+    # Khởi tạo Map
     m = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, fullscreen_control=True, scale_control=True, tiles=None)
-    m.add_tile_layer(url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", name="Google Satellite", attribution="Google", overlay=True, shown=False)
+    m.add_tile_layer(url="https://https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", name="Google Satellite", attribution="Google", overlay=True, shown=False)
     m.add_tile_layer(url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", name="OpenStreetMap", attribution="OpenStreetMap", overlay=True, shown=False)
-
+    
+    # === THAY THẾ SPLIT MAP BẰNG ADD_RASTER VÀ LAYER CONTROL (ỔN ĐỊNH) ===
     if os.path.exists(sat_path) and os.path.exists(class_path):
-        m.split_map(left_layer=sat_path, right_layer=class_path)
+        # Ảnh 1: Ảnh vệ tinh (Tắt hiện thị ban đầu)
+        m.add_raster(sat_path, layer_name=f"Спутник ({year})", shown=False)
+        # Ảnh 2: Phân loại (Hiện thị mặc định)
+        m.add_raster(class_path, layer_name=f"Классификация ({year})", shown=True)
+        # Thêm Layer Control để bật/tắt 2 lớp ảnh
+        m.add_layer_control() 
     else:
         st.warning(f"Chưa tìm thấy ảnh năm {year}")
 
@@ -219,56 +210,69 @@ m_main = render_main_map(selected_year_main)
 m_main.to_streamlit(height=500)
 
 # ====================================================================
-# --- 8. PHẦN SO SÁNH (ĐỘC LẬP HOÀN TOÀN) ---
+# --- 8. PHẦN SO SÁNH (FIX LỖI) ---
 # ====================================================================
+st.markdown("---")
+st.subheader("🔍 Сравнение изображений (So sánh độc lập)")
+
 col_comp1, col_comp2 = st.columns(2)
 
 def render_sub_map_independent(key_suffix):
-    # Mỗi ô có menu riêng, dùng KEY riêng (key_suffix) để không bị trùng
     c_y, c_t = st.columns([1, 1])
     with c_y:
-        # Biến năm riêng cho ô này
         y_sel = st.selectbox("Год:", available_years, key=f"year_{key_suffix}")
     with c_t:
-        # Biến loại ảnh riêng cho ô này
         t_sel = st.selectbox("Тип:", ["Спутник", "Классификация"], key=f"type_{key_suffix}")
     
-    final_path = None
-    if "Спутник" in t_sel: 
-        final_path = f"data/{y_sel}/satellite.tif"
-    else: 
-        final_path = f"data/{y_sel}/landcover.tif"
+    final_path = f"data/{y_sel}/satellite.tif" if "Спутник" in t_sel else f"data/{y_sel}/landcover.tif"
 
     m_sub = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, scale_control=True, tiles="OpenStreetMap")
     
-    if final_path and os.path.exists(final_path):
+    if os.path.exists(final_path):
         try:
+            # Dùng add_raster thay vì add_raster_split
             m_sub.add_raster(final_path, layer_name="Image", zoom_to_layer=False)
-        except Exception as e:
-            st.error("Cần cài thư viện: pip install xarray rioxarray")
+            m_sub.add_layer_control()
+        except Exception:
+            # Lỗi xảy ra là do localtileserver không chạy
+            st.error("Lỗi hiển thị ảnh: Vui lòng kiểm tra lại cấu hình thư viện.")
     else:
-        st.warning(f"Không có ảnh {y_sel}")
+        st.warning(f"Không tìm thấy ảnh {y_sel}")
     
     m_sub.to_streamlit(height=400)
 
-# Gọi hàm render cho 2 cột với key khác nhau ("left" và "right")
-# Điều này đảm bảo chúng độc lập với nhau và độc lập với Main Map
 with col_comp1:
-    st.markdown('<div class="comp-header"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="comp-header">Cửa sổ 1</div>', unsafe_allow_html=True)
     render_sub_map_independent("left")
 
 with col_comp2:
-    st.markdown('<div class="comp-header"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="comp-header">Cửa sổ 2</div>', unsafe_allow_html=True)
     render_sub_map_independent("right")
-# ====================================================================
 
 # --- 9. THÔNG TIN ĐẢO ---
-# [FIX LỖI 3] Đảm bảo unsafe_allow_html=True để render thẻ HTML
 st.markdown("---")
 st.subheader("ℹ️ Обзор острова Тюлений")
 st.markdown("""
 <div class="info-card">
     <h3>Остров Тюлений (Tyuleniy Island)</h3>
-    <p>Остров Тюлений — это песчаный остров, расположенный в северо-западной части Каспийского моря в 47 км от побережья Дагестана (Россия), который, несмотря на отсутствие постоянного населения, имеет исключительное экологическое значение как ключевое место обитания краснокнижных каспийских тюленей и гнездования редких видов птиц. Остров характеризуется низменным рельефом с неустойчивой формой, постоянно меняющейся под воздействием колебаний уровня моря и ветров, а также суровым полупустынным климатом; ранее здесь существовал рыбацкий поселок, но в настоящее время территория используется исключительно для работы гидрометеорологической станции и пограничных постов с целью мониторинга уникальной экосистемы..</p>
+    <p>Остров Тюлений — песчаный остров в северо-западной части Каспийского моря. Đây là một khu vực có ý nghĩa đặc biệt quan trọng về mặt sinh thái và đa dạng sinh học.</p>
+
+    <h4>1. 📍 География и Административное положение</h4>
+    <ul>
+        <li><b>Расположение:</b> 47 км к востоку от побережья Дагестана, у входа в Кизлярский залив.</li>
+        <li><b>Координаты:</b> 44°29′ с.ш., 47°31′ в.д.</li>
+    </ul>
+
+    <h4>2. 🏜️ Рельеф и Климат</h4>
+    <ul>
+        <li><b>Рельеф:</b> Низменный, песчаный, với các bãi lầy và cồn cát.</li>
+        <li><b>Климат:</b> Полупустынный, khô hạn.</li>
+    </ul>
+
+    <h4>3. 🌿 Экосистема</h4>
+    <ul>
+        <li><b>Каспийский тюлень (Pusa caspica):</b> Vẫn là nơi quan trọng để hải cẩu nghỉ ngơi và sinh sản.</li>
+        <li><b>Khu vực Chim quan trọng (IBA):</b> Nơi trú đông và làm tổ của nhiều loài chim quý hiếm.</li>
+    </ul>
 </div>
 """, unsafe_allow_html=True)
