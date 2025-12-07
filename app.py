@@ -18,9 +18,15 @@ from branca.element import Template, Element
 # --- 1. CẤU HÌNH TRANG ---
 st.set_page_config(layout="wide", page_title="WebGIS Monitoring - Остров Тюлений")
 
-# Tọa độ trung tâm đảo Tyuleniy
+# Tọa độ trung tâm đảo Tyuleniy (Mặc định)
 TARGET_CENTER = [44.475, 47.513]
 TARGET_ZOOM = 13
+
+# Khởi tạo trạng thái bản đồ nếu chưa có
+if 'map_center' not in st.session_state:
+    st.session_state.map_center = TARGET_CENTER
+if 'map_zoom' not in st.session_state:
+    st.session_state.map_zoom = TARGET_ZOOM
 
 # --- CSS TÙY CHỈNH ---
 st.markdown("""
@@ -34,8 +40,6 @@ st.markdown("""
             height: auto !important; 
             min-height: 500px;
         }
-        
-        /* Xóa CSS cho Opacity Control không sử dụng */
         
         .stat-box {
             background-color: #f8f9fa;
@@ -94,6 +98,15 @@ with st.sidebar:
     
     selected_year_main = st.selectbox("Год:", available_years, index=len(available_years)-1, key="main_year_selector")
     
+    # Thanh trượt Opacity trong Sidebar
+    opacity_value = st.slider(
+        "Прозрачность слоя Классификации", 
+        min_value=0.0, 
+        max_value=1.0, 
+        value=0.8, 
+        step=0.05,
+        key="global_opacity_slider"
+    )
     st.markdown("---")
     
     # Số liệu thống kê (Theo năm chính)
@@ -144,17 +157,6 @@ with st.sidebar:
 # --- 4. TIÊU ĐỀ ---
 st.title(f"Остров Тюлений - {selected_year_main}")
 
-# 🔥 THÊM: Thanh trượt Opacity Streamlit ngay dưới tiêu đề
-opacity_value = st.slider(
-    "Прозрачность слоя Классификации", 
-    min_value=0.0, 
-    max_value=1.0, 
-    value=0.8, 
-    step=0.05,
-    key="global_opacity_slider"
-)
-st.markdown("---")
-
 # --- 5. TẠO NÚT ZOOM (SVG) ---
 zoom_icon_svg = """
 <svg width="30" height="30" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -189,62 +191,85 @@ class ZoomButton(MacroElement):
         {% endmacro %}
     """)
 
-# 🔥 XÓA/LOẠI BỎ class OpacityControl không cần thiết
-
 # --- 6. HÀM XỬ LÝ ẢNH ---
+@st.cache_resource
 def process_matched_image(sat_path, class_path):
-    output_path = sat_path.replace(".tif", "_matched.tif")
-    if os.path.exists(output_path): return output_path
+    # Sử dụng tên tệp đã được xử lý (ví dụ: data/2022/satellite_matched.tif)
+    output_path = os.path.join(os.path.dirname(sat_path), f"satellite_matched.tif")
+    
+    if not os.path.exists(sat_path) or not os.path.exists(class_path):
+        # Trả về đường dẫn gốc nếu thiếu tệp đầu vào
+        st.error(f"Не найдены исходные файлы для обработки: {os.path.basename(sat_path)} или {os.path.basename(class_path)}.")
+        return sat_path
+
+    # KHÔNG CẦN TẠO LẠI TỆP NẾU NÓ ĐÃ TỒN TẠI
+    if os.path.exists(output_path): 
+        return output_path
+        
     try:
         with rasterio.open(class_path) as ref:
             dst_crs, dst_transform = ref.crs, ref.transform
             dst_width, dst_height = ref.width, ref.height
             kwargs = ref.meta.copy()
+            
         with rasterio.open(sat_path) as src:
             dtype_val = src.dtypes[0] if isinstance(src.dtypes, (list, tuple)) else src.dtypes
             kwargs.update({'crs': dst_crs, 'transform': dst_transform, 'width': dst_width, 'height': dst_height, 'count': src.count, 'dtype': dtype_val, 'driver': 'GTiff'})
+            
             with rasterio.open(output_path, 'w', **kwargs) as dst:
                 for i in range(1, src.count + 1):
                     reproject(source=rasterio.band(src, i), destination=rasterio.band(dst, i), src_transform=src.transform, src_crs=src.crs, dst_transform=dst_transform, dst_crs=dst_crs, resampling=Resampling.nearest)
+        
         return output_path
-    except Exception: return sat_path 
+        
+    except Exception as e:
+        st.error(f"Критическая ошибка при перепроецировании изображения: {e}") 
+        return sat_path 
 
 # --- 7. BẢN ĐỒ CHÍNH (ĐỘC LẬP) ---
-def render_main_map(year, opacity): # 🔥 Thêm tham số opacity
+def render_main_map(year, opacity):
     original_sat_path = f"data/{year}/satellite.tif"
     class_path = f"data/{year}/landcover.tif"
-    sat_path = process_matched_image(original_sat_path, class_path) if os.path.exists(original_sat_path) and os.path.exists(class_path) else original_sat_path
-
-    m = leafmap.Map(center=TARGET_CENTER, zoom=TARGET_ZOOM, draw_control=False, measure_control=False, fullscreen_control=True, scale_control=True, tiles=None)
     
-    # 1. Thêm lớp nền vệ tinh (PHẢI BẬT VÀ NẰM DƯỚI CÙNG)
+    sat_path_exists = os.path.exists(original_sat_path)
+    class_path_exists = os.path.exists(class_path)
+    
+    # Lấy trạng thái bản đồ đã lưu từ session state
+    center = st.session_state.map_center
+    zoom = st.session_state.map_zoom
+    
+    m = leafmap.Map(center=center, zoom=zoom, draw_control=False, measure_control=False, fullscreen_control=True, scale_control=True, tiles=None)
+    
+    # 1. Thêm lớp nền vệ tinh
     m.add_tile_layer(url="https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}", name="Google Satellite", attribution="Google", overlay=True, shown=True)
     m.add_tile_layer(url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", name="OpenStreetMap", attribution="OpenStreetMap", overlay=True, shown=False)
     
     CLASSIFICATION_LAYER_NAME = f"Классификация {year}"
 
-    if os.path.exists(sat_path) and os.path.exists(class_path):
+    if sat_path_exists and class_path_exists:
+        
+        # Xử lý và lấy đường dẫn của ảnh vệ tinh đã khớp (matched_sat_path)
+        matched_sat_path = process_matched_image(original_sat_path, class_path)
         
         # 2. Thêm lớp ảnh vệ tinh raster đã xử lý (nằm trên lớp nền Google)
         try:
-             # Đảm bảo lớp này có mặt
-             m.add_raster(sat_path, layer_name=f"Спутник {year} (Raster)", opacity=1.0, shown=False) 
+             # Dùng matched_sat_path để đảm bảo tọa độ khớp
+             m.add_raster(matched_sat_path, layer_name=f"Спутник {year} (Raster)", opacity=1.0, shown=False) 
         except Exception:
              st.warning(f"Не удалось загрузить растровое спутниковое изображение за {year} год")
         
-        # 3. Thêm lớp phân loại (Luôn nằm trên cùng, áp dụng Opacity từ thanh trượt)
+        # 3. Thêm lớp phân loại (Luôn nằm trên cùng, Áp dụng Opacity từ thanh trượt)
         try:
-            m.add_raster(class_path, layer_name=CLASSIFICATION_LAYER_NAME, opacity=opacity, shown=True) # 🔥 Áp dụng opacity_value
+            m.add_raster(class_path, layer_name=CLASSIFICATION_LAYER_NAME, opacity=opacity, shown=True) 
         except Exception:
              st.warning(f"Не удалось загрузить слой классификации за {year} год")
 
     else:
-        st.warning(f"Не найдено изображение за {year} год")
+        # Nếu thiếu tệp gốc, in cảnh báo chung
+        st.error(f"Не найдены исходные файлы .tif для {year} года. Проверьте: data/{year}/satellite.tif и landcover.tif")
 
     m.add_child(ZoomButton())
     
-    # 🔥 XÓA: Loại bỏ m.add_child(OpacityControl(...))
-
     legend_html = """
     <div style="position: fixed; bottom: 30px; right: 10px; width: 170px; background-color: white; border: 2px solid #333; z-index:9999; font-size:14px; padding: 10px; opacity: 0.95; font-family: Arial, sans-serif;">
         <b style="color:black; display:block; margin-bottom:5px; border-bottom:1px solid #ccc; padding-bottom:3px;">&#1050;&#1083;&#1072;&#1089;&#1089;&#1080;&#1092;&#1080;&#1082;&#1072;&#1094;&#1080;&#1103;</b>
@@ -256,26 +281,37 @@ def render_main_map(year, opacity): # 🔥 Thêm tham số opacity
     </div>
     """
     m.add_html(legend_html, position='bottomright')
-    return m
+    
+    # LƯU VÀ HIỂN THỊ TRẠNG THÁI BẢN ĐỒ
+    # Thêm tham số key để tránh lỗi trong lần re-run do thay đổi code
+    map_state = leafmap.to_streamlit(m, height=650, return_value=True, key="main_map_state") 
+    
+    if map_state is not None:
+        if 'center' in map_state and 'zoom' in map_state:
+            st.session_state.map_center = map_state['center']
+            st.session_state.map_zoom = map_state['zoom']
+            
+    return m 
+
 
 # Hiển thị bản đồ chính
-m_main = render_main_map(selected_year_main, opacity_value) # 🔥 Truyền giá trị opacity
+render_main_map(selected_year_main, opacity_value) 
 
-# Bọc bản đồ chính trong div để áp dụng CSS hình vuông
-st.markdown('<div class="stCustomMap">', unsafe_allow_html=True)
-m_main.to_streamlit(height=650) 
-st.markdown('</div>', unsafe_allow_html=True)
 
 # ====================================================================
-# --- 8. PHẦN SO SÁNH (ĐỘC LẬP HOÀN TOÀN) ---
+# --- 8. PHẦN SO SÁNH (KHÔI PHỤC 2 Ô BẢN ĐỒ CON) ---
 # ====================================================================
+st.markdown("---") 
+st.subheader("Сравнение слоев")
+
 col_comp1, col_comp2 = st.columns(2)
 
 def render_sub_map_independent(key_suffix):
-    # Mỗi ô có menu riêng, dùng KEY riêng (key_suffix) để không bị trùng
+    available_years_sub = available_years
+    
     c_y, c_t = st.columns([1, 1])
     with c_y:
-        y_sel = st.selectbox("Год:", available_years, key=f"year_{key_suffix}")
+        y_sel = st.selectbox("Год:", available_years_sub, key=f"year_{key_suffix}")
     with c_t:
         t_sel = st.selectbox("Тип:", ["Спутник", "Классификация"], key=f"type_{key_suffix}")
     
@@ -300,13 +336,12 @@ def render_sub_map_independent(key_suffix):
     
     m_sub.to_streamlit(height=400)
 
-# Gọi hàm render cho 2 cột với key khác nhau ("left" và "right")
 with col_comp1:
-    st.markdown('<div class="comp-header"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="comp-header">Слой 1</div>', unsafe_allow_html=True)
     render_sub_map_independent("left")
 
 with col_comp2:
-    st.markdown('<div class="comp-header"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="comp-header">Слой 2</div>', unsafe_allow_html=True)
     render_sub_map_independent("right")
 # ====================================================================
 
